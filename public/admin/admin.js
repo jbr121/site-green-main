@@ -119,18 +119,18 @@
       await fetchCsrf();
       return api(url, opts, false);
     }
-    if (res.status === 401 && !url.includes('/api/login')) {
+    if (res.status === 401 && !url.includes('/api/login') && !url.includes('/password')) {
       state.user = null;
       state.csrf = data.csrf || state.csrf;
       if (data.stage === 'totp') showTotpStep('');
       else showLogin();
       throw new Error(data.error || 'Sessão encerrada. Entre de novo.');
     }
-    if (res.status === 423 || data.mustChangePassword) {
+    if (res.status === 423) {
       showPasswordGate();
       throw new Error(data.error || 'Troque sua senha para continuar.');
     }
-    if (res.status === 428 || data.needs2faSetup) {
+    if (res.status === 428) {
       showTwoFactorSetup();
       throw new Error(data.error || 'Configure a verificação em duas etapas.');
     }
@@ -215,7 +215,7 @@
       return;
     }
     try {
-      const data = await api(`/api/users/${state.user.id}/password`, {
+      const data = await api('/api/users/me/password', {
         method: 'PUT',
         json: { currentPassword: $('#pw-current').value, password: next },
       });
@@ -1773,7 +1773,7 @@
     if (!currentPassword) return toast('Digite sua senha atual.');
     if (password.length < 8) return toast('A nova senha precisa de ao menos 8 caracteres.');
     try {
-      await api(`/api/users/${state.user.id}/password`, { method: 'PUT', json: { currentPassword, password } });
+      await api('/api/users/me/password', { method: 'PUT', json: { currentPassword, password } });
       $(currentSel).value = '';
       $(nextSel).value = '';
       toast('Senha alterada');

@@ -1063,7 +1063,9 @@ function requireAuth(req, res, next) {
     logAction(req, "security.unauthorized", { detail: `${req.method} ${req.originalUrl}` });
     return res.status(401).json({ error: "Faça login para continuar." });
   }
-  const selfPasswordRoute = req.method === "PUT" && req.path === `/api/users/${req.session.user.id}/password`;
+  const selfPasswordRoute =
+    req.method === "PUT" &&
+    (req.path === `/api/users/${req.session.user.id}/password` || req.path === "/api/users/me/password");
   if (req.session.user.mustChangePassword && !selfPasswordRoute) {
     return res.status(423).json({ error: "Troque sua senha para continuar.", mustChangePassword: true });
   }
@@ -2382,7 +2384,7 @@ app.put("/api/users/:id/password", requireAuth, async (req, res, next) => {
   try {
     const db = getDb();
     const me = req.session.user;
-    const targetId = str(req.params.id, 60);
+    const targetId = str(req.params.id, 60) === "me" ? me.id : str(req.params.id, 60);
     const isSelf = me.id === targetId;
     if (!isSelf && me.role !== "admin") {
       logAction(req, "security.forbidden", { detail: "tentou trocar a senha de outra pessoa" });
