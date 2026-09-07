@@ -2,18 +2,7 @@
 (() => {
   const RETAIL_SKIP = 'Atacado';
   const DEFAULT_CATEGORY = 'all';
-  const CATALOG_FILTERS = [
-    { id: 'promo', name: 'Promoções' },
-    { id: 'featured', name: 'Destaques' },
-    { id: 'available', name: 'Disponíveis' },
-  ];
-  const CATALOG_SORTS = [
-    { id: 'price-asc', name: 'Menor preço' },
-    { id: 'price-desc', name: 'Maior preço' },
-  ];
   const SESSION_LOCATION_KEY = 'gs_location_session';
-  const CATALOG_FILTER_IDS = new Set(['all', ...CATALOG_FILTERS.map((c) => c.id)]);
-  const CATALOG_SORT_IDS = new Set(['default', ...CATALOG_SORTS.map((c) => c.id)]);
   const CASHBOXES = [
     { id: 'Itajaí', title: 'Itajaí e região', hint: 'Entrega de motoboy', confirm: 'Confirmo que estou em Itajaí e região' },
     { id: 'Joinville', title: 'Joinville e região', hint: 'Entrega de motoboy', confirm: 'Confirmo que estou em Joinville e região' },
@@ -45,6 +34,7 @@
     useCashback: false,
     csrf: '',
     authEntry: false,
+    changingLocation: false,
   };
 
   const $ = (sel) => document.querySelector(sel);
@@ -101,9 +91,6 @@
       note: $('#order-note').value.trim(),
     }));
   }
-  function loadCatalogPrefs() {
-    try { return JSON.parse(sessionStorage.getItem('gs_catalog')) || {}; } catch { return {}; }
-  }
   function saveCatalogPrefs() {
     try {
       sessionStorage.setItem('gs_catalog', JSON.stringify({
@@ -114,10 +101,9 @@
     } catch { /* sessão cheia ou privada */ }
   }
   function applyCatalogPrefs() {
-    const prefs = loadCatalogPrefs();
-    if (prefs.category) state.activeCategory = prefs.category;
-    if (prefs.filter && CATALOG_FILTER_IDS.has(prefs.filter)) state.catalogFilter = prefs.filter;
-    if (prefs.sort && CATALOG_SORT_IDS.has(prefs.sort)) state.catalogSort = prefs.sort;
+    state.activeCategory = 'all';
+    state.catalogFilter = 'all';
+    state.catalogSort = 'default';
   }
   function isPromo(p) {
     return !!(p.originalPrice && p.originalPrice > p.price);
@@ -195,25 +181,39 @@
     state.locationReady = true;
     return true;
   }
-  function initLocationGate() {
+  function openLocationGate(opts = {}) {
+    const changing = !!opts.changing;
+    state.changingLocation = changing;
     if (!(state.store.shipping && state.store.shipping.length)) {
       state.locationReady = true;
-      initAuthGate();
+      renderRegionBtn();
+      if (!changing) initAuthGate();
       return;
     }
-    if (applySavedLocation()) {
+    if (!changing && applySavedLocation()) {
       refreshCityCatalog();
       initAuthGate();
       return;
     }
     const gate = $('#location-gate');
     if (!gate) {
-      initAuthGate();
+      if (!changing) initAuthGate();
       return;
+    }
+    if (changing) {
+      try { sessionStorage.removeItem(SESSION_LOCATION_KEY); } catch { /* ignore */ }
+      state.locationReady = false;
+      state.cityConfirmed = false;
+      const box = $('#location-confirm');
+      if (box) box.checked = false;
     }
     gate.classList.remove('hidden');
     document.body.style.overflow = 'hidden';
     renderLocationChoices();
+    updateLocationContinue();
+  }
+  function initLocationGate() {
+    openLocationGate();
   }
   function shippingOptions() {
     const order = CASHBOXES.map((c) => c.id);
@@ -255,6 +255,8 @@
     if (btn) btn.disabled = !(box && box.checked && currentShipping());
   }
   function closeLocationGate() {
+    const changing = state.changingLocation;
+    state.changingLocation = false;
     const gate = $('#location-gate');
     if (gate) gate.classList.add('hidden');
     state.locationReady = true;
@@ -262,11 +264,11 @@
     saveLocation();
     state.activeCategory = 'all';
     saveCatalogPrefs();
-    renderCategories();
-    renderDeals();
-    renderGrid();
-    renderCartBar();
-    initAuthGate();
+    refreshCityCatalog();
+    renderChoices();
+    renderCart();
+    if (changing) revealStore();
+    else initAuthGate();
   }
 
   /* ---------- data ---------- */
@@ -572,50 +574,18 @@
     );
   }
 
-  function renderCategories() {
-    const nav = $('#categories');
-    if (!nav) return;
-    const pills = [{ id: 'all', name: 'Todas' }, ...catalogCategories()];
-    nav.innerHTML = pills
-      .map((c) => `<button type="button" class="cat-pill ${c.id === state.activeCategory ? 'active' : ''}" data-cat="${esc(c.id)}">${esc(c.name)}</button>`)
-      .join('');
-    nav.querySelectorAll('.cat-pill').forEach((b) =>
-      b.addEventListener('click', () => {
-        state.activeCategory = b.dataset.cat;
-        saveCatalogPrefs();
-        renderCategories();
-        renderGrid();
-        renderCartBar();
-      })
-    );
-    renderCatalogSorts();
+  function renderRegionBtn() {
+    const btn = $('#region-open');
+    const label = $('#region-label');
+    if (!btn || !label) return;
+    const ship = currentShipping();
+    const ready = state.locationReady && !!ship;
+    btn.classList.toggle('hidden', !ready);
+    if (ready) label.textContent = cashboxMeta(ship.name).title;
   }
 
-  function renderCatalogSorts() {
-    const nav = $('#catalog-sorts');
-    if (!nav) return;
-    const pills = [
-      ...CATALOG_SORTS.map((c) => ({ ...c, kind: 'sort' })),
-      ...CATALOG_FILTERS.map((c) => ({ ...c, kind: 'filter' })),
-    ];
-    nav.innerHTML = pills
-      .map((c) => {
-        const on = c.kind === 'sort' ? state.catalogSort === c.id : state.catalogFilter === c.id;
-        return `<button type="button" class="cat-pill ${on ? 'active' : ''}" data-kind="${c.kind}" data-id="${esc(c.id)}">${esc(c.name)}</button>`;
-      })
-      .join('');
-    nav.querySelectorAll('.cat-pill').forEach((b) =>
-      b.addEventListener('click', () => {
-        if (b.dataset.kind === 'sort') {
-          state.catalogSort = state.catalogSort === b.dataset.id ? 'default' : b.dataset.id;
-        } else {
-          state.catalogFilter = state.catalogFilter === b.dataset.id ? 'all' : b.dataset.id;
-        }
-        saveCatalogPrefs();
-        renderCatalogSorts();
-        renderGrid();
-      })
-    );
+  function renderCategories() {
+    renderRegionBtn();
   }
 
   /* ---------- animação de entrada no scroll ---------- */
@@ -783,16 +753,7 @@
     const list = filtered();
     const grid = $('#grid');
     const ship = currentShipping();
-    const catName = state.activeCategory === 'all'
-      ? (ship ? cashboxMeta(ship.name).title : 'Catálogo')
-      : (catalogCategories().find((c) => c.id === state.activeCategory) || state.categories.find((c) => c.id === state.activeCategory) || {}).name || 'Produtos';
-    const extras = [];
-    if (state.catalogFilter === 'promo') extras.push('Promoções');
-    if (state.catalogFilter === 'featured') extras.push('Destaques');
-    if (state.catalogFilter === 'available') extras.push('Disponíveis');
-    if (state.catalogSort === 'price-asc') extras.push('Menor preço');
-    if (state.catalogSort === 'price-desc') extras.push('Maior preço');
-    const title = extras.length ? `${catName} · ${extras.join(' · ')}` : catName;
+    const title = ship ? cashboxMeta(ship.name).title : 'Catálogo';
     $('#grid-title').textContent = state.search ? `Busca: "${state.search}"` : title;
     $('#result-count').textContent = `${list.length} ${list.length === 1 ? 'item' : 'itens'}`;
     $('#empty').classList.toggle('hidden', list.length > 0);
@@ -1716,6 +1677,10 @@
       if (!locConfirm || !locConfirm.checked) return toast('Confirme sua cidade');
       closeLocationGate();
     });
+  }
+  const regionOpen = $('#region-open');
+  if (regionOpen) {
+    regionOpen.addEventListener('click', () => openLocationGate({ changing: true }));
   }
   $('#account-open').addEventListener('click', () => openAccount({ entry: false }));
   $('#account-close').addEventListener('click', closeAccount);

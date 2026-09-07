@@ -199,32 +199,23 @@ body.store .brand-name {
   animation: pop 0.3s var(--ease);
 }
 
-/* ---------- categorias ---------- */
-.categories {
-  max-width: var(--maxw); margin: 0 auto; padding: 0 16px 10px;
-  display: flex; gap: 8px; overflow-x: auto; scrollbar-width: none;
-  scroll-snap-type: x proximity;
+/* ---------- região atual ---------- */
+.region-bar {
+  width: min(var(--maxw), calc(100% - 32px));
+  margin: 0 auto 12px;
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 10px 16px;
+  border: 1px solid var(--line-2); border-radius: 999px;
+  background: rgba(255, 196, 34, 0.08);
+  color: var(--text); font-size: 13.5px; font-weight: 800;
+  cursor: pointer;
+  transition: border-color 0.2s var(--ease), background 0.2s var(--ease);
 }
-.categories::-webkit-scrollbar { display: none; }
-.cat-pill {
-  padding: 9px 17px; border-radius: 999px; white-space: nowrap; scroll-snap-align: start;
-  font-size: 13px; font-weight: 700; color: var(--text-2);
-  border: 1px solid var(--line); background: rgba(255, 255, 255, 0.03);
-  transition: all 0.2s var(--ease);
-}
-.cat-pill:hover { color: var(--text); border-color: var(--line-2); transform: translateY(-1px); }
-.cat-pill.active {
-  background: linear-gradient(135deg, var(--gold), #f0a500);
-  color: #17120b; border-color: transparent;
-  box-shadow: 0 6px 20px rgba(255, 190, 14, 0.3);
-}
-.catalog-sorts {
-  padding-top: 0;
-  padding-bottom: 12px;
-}
-.catalog-sorts .cat-pill {
-  padding: 7px 14px;
-  font-size: 12px;
+.region-bar:hover { border-color: var(--gold); background: rgba(255, 196, 34, 0.14); }
+.region-bar small {
+  color: #17120b; background: var(--gold);
+  font-size: 11.5px; font-weight: 800; letter-spacing: 0.04em; text-transform: uppercase;
+  padding: 5px 11px; border-radius: 999px;
 }
 
 /* ---------- hero ---------- */
@@ -768,8 +759,7 @@ body.store .cart-bar {
   }
 
   .header-inner { gap: 8px; padding: 14px 12px 12px; }
-  .categories { padding: 0 12px 8px; }
-  .catalog-sorts { padding-bottom: 10px; }
+  .region-bar { width: calc(100% - 24px); margin-bottom: 10px; padding: 9px 12px; font-size: 13px; }
   .cart-btn { padding: 0 13px; height: 42px; }
   .cart-btn-text { display: none; }
   body.store .brand-mark { width: 34px; height: 34px; }

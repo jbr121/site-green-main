@@ -22,7 +22,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=Unbounded:wght@500;700;900&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/css/base.css?v=17" />
-  <link rel="stylesheet" href="/css/store.css?v=22" />
+  <link rel="stylesheet" href="/css/store.css?v=23" />
 </head>
 <body class="store">
   <div id="age-gate" class="age-gate hidden">
@@ -75,8 +75,10 @@
         <span class="cart-count hidden" id="cart-count">0</span>
       </button>
     </div>
-    <nav class="categories" id="categories" aria-label="Categorias"></nav>
-    <nav class="categories catalog-sorts" id="catalog-sorts" aria-label="Ordenar e filtrar"></nav>
+    <button type="button" class="region-bar hidden" id="region-open" aria-label="Trocar região">
+      <span id="region-label">Região</span>
+      <small>Trocar</small>
+    </button>
   </header>
 
   <main id="top">
@@ -351,6 +353,6 @@
     </div>
   </div>
 
-  <script src="/js/app.js?v=26"></script>
+  <script src="/js/app.js?v=27"></script>
 </body>
 </html>
