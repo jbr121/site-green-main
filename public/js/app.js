@@ -11,6 +11,7 @@
     { id: 'price-asc', name: 'Menor preço' },
     { id: 'price-desc', name: 'Maior preço' },
   ];
+  const SESSION_LOCATION_KEY = 'gs_location_session';
   const CATALOG_FILTER_IDS = new Set(['all', ...CATALOG_FILTERS.map((c) => c.id)]);
   const CATALOG_SORT_IDS = new Set(['default', ...CATALOG_SORTS.map((c) => c.id)]);
   const CASHBOXES = [
@@ -171,22 +172,22 @@
   /* ---------- localização na entrada ---------- */
   function loadLocation() {
     try {
-      return JSON.parse(localStorage.getItem('gs_location')) || null;
+      return JSON.parse(sessionStorage.getItem(SESSION_LOCATION_KEY)) || null;
     } catch {
       return null;
     }
   }
   function saveLocation() {
-    localStorage.setItem('gs_location', JSON.stringify({
-      shipId: state.shipId,
-      confirmed: true,
-      at: Date.now(),
-    }));
+    try {
+      sessionStorage.setItem(SESSION_LOCATION_KEY, JSON.stringify({
+        shipId: state.shipId,
+        confirmed: true,
+      }));
+    } catch { /* sessão privada: mostra a escolha novamente no próximo carregamento */ }
   }
   function applySavedLocation() {
     const loc = loadLocation();
     if (!loc || !loc.confirmed) return false;
-    if (loc.at && Date.now() - loc.at > 30 * 24 * 60 * 60 * 1000) return false;
     const ship = (state.store.shipping || []).find((s) => s.id === loc.shipId);
     if (!ship) return false;
     state.shipId = loc.shipId;
