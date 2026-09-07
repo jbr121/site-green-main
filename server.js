@@ -33,6 +33,7 @@ const LOGIN_MAX_FAILS = 8;
 const LOGIN_LOCK_MS = 15 * 60 * 1000;
 const AUDIT_MAX_BYTES = Number(process.env.AUDIT_MAX_MB || 8) * 1024 * 1024;
 const LEDGER_MAX = 20000;
+const COUPON_TYPES = ["percent", "free_shipping", "gift"];
 
 const ROOT = __dirname;
 const DATA_DIR = path.join(ROOT, "data");
@@ -1183,8 +1184,6 @@ app.get("/api/public/store", (_req, res) => {
 });
 
 /* ---------- cupons ---------- */
-
-const COUPON_TYPES = ["percent", "free_shipping", "gift"];
 
 function normalizeCouponCode(code) {
   return str(code, 30).toUpperCase().replace(/[^A-Z0-9_-]/g, "");
