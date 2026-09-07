@@ -19,6 +19,8 @@ const PORT = Number(process.env.PORT) || 3000;
 const HOST = process.env.HOST || "0.0.0.0";
 const FORCE_HTTPS = /^(1|true|yes|on)$/i.test(process.env.FORCE_HTTPS || "");
 const TRUST_PROXY = process.env.TRUST_PROXY || (PROD ? "1" : "loopback");
+// When true, skip mandatory 2FA requirement (useful for testing / temporary disable)
+const DISABLE_2FA = /^(1|true|yes|on)$/i.test(process.env.DISABLE_2FA || "");
 
 // IPs liberados para o painel (vazio = liberado para todos)
 const ADMIN_ALLOW_IPS = String(process.env.ADMIN_ALLOW_IPS || "")
@@ -77,6 +79,10 @@ const SESSION_SECRET = resolveSessionSecret();
 
 function uid(prefix) {
   return `${prefix}-${Date.now().toString(36)}-${crypto.randomBytes(5).toString("hex")}`;
+}
+
+function needsTwoFactorSetup(user) {
+  return !DISABLE_2FA && !(user && user.totp && user.totp.confirmedAt);
 }
 
 /** Texto seguro: remove nulos/controle, corta no tamanho máximo. */
@@ -1069,8 +1075,10 @@ function requireAuth(req, res, next) {
   if (req.session.user.mustChangePassword && !selfPasswordRoute) {
     return res.status(423).json({ error: "Troque sua senha para continuar.", mustChangePassword: true });
   }
-  const setupRoute = req.path === "/api/2fa/setup" || req.path === "/api/2fa/activate" || req.path === "/api/2fa/status";
-  if (req.session.user.needs2faSetup && !setupRoute) {
+  const setupRoute =
+    req.path === "/api/2fa/setup" || req.path === "/api/2fa/activate" || req.path === "/api/2fa/status";
+  // allow disabling mandatory 2FA in environments where it's not desirable
+  if (!DISABLE_2FA && req.session.user.needs2faSetup && !setupRoute) {
     return res.status(428).json({ error: "Configure a verificação em duas etapas para continuar.", needs2faSetup: true });
   }
   next();
@@ -1530,7 +1538,7 @@ function sessionUserOf(user) {
     name: user.name,
     role: user.role === "admin" ? "admin" : "editor",
     mustChangePassword: !!user.mustChangePassword,
-    needs2faSetup: !(user.totp && user.totp.confirmedAt),
+    needs2faSetup: needsTwoFactorSetup(user),
   };
 }
 
@@ -1597,8 +1605,13 @@ app.post("/api/login", loginLimiter, async (req, res, next) => {
     }
 
     // Senha padrão pendente ou 2FA ainda não configurado: entra em modo restrito
-    if (user.mustChangePassword || !(user.totp && user.totp.confirmedAt)) {
-      return startSession(req, res, next, user, user.mustChangePassword ? "senha precisa ser trocada" : "2FA precisa ser configurado");
+    if (DISABLE_2FA || user.mustChangePassword || !(user.totp && user.totp.confirmedAt)) {
+      const detail = user.mustChangePassword
+        ? "senha precisa ser trocada"
+        : DISABLE_2FA
+          ? "2FA temporariamente desativado"
+          : "2FA precisa ser configurado";
+      return startSession(req, res, next, user, detail);
     }
 
     // 2FA ativo: a sessão só nasce depois do código
@@ -1695,12 +1708,16 @@ app.get("/api/me", (req, res) => {
     return res.status(401).json({ error: "Não logado." });
   }
   const me = (getDb().users || []).find((u) => u.id === req.session.user.id);
+  const user = {
+    ...req.session.user,
+    needs2faSetup: DISABLE_2FA ? false : !!req.session.user.needs2faSetup,
+  };
   res.json({
-    user: req.session.user,
+    user,
     csrf: csrfToken(req),
-    stage: req.session.user.mustChangePassword ? "password" : req.session.user.needs2faSetup ? "setup2fa" : "ready",
+    stage: user.mustChangePassword ? "password" : user.needs2faSetup ? "setup2fa" : "ready",
     mustChangePassword: !!req.session.user.mustChangePassword,
-    needs2faSetup: !!req.session.user.needs2faSetup,
+    needs2faSetup: !!user.needs2faSetup,
     recoveryLeft: me ? recoveryLeft(me) : 0,
   });
 });
@@ -2419,7 +2436,7 @@ app.put("/api/users/:id/password", requireAuth, async (req, res, next) => {
     });
 
     if (isSelf) {
-      req.session.user = { ...me, mustChangePassword: false };
+      req.session.user = { ...me, mustChangePassword: false, needs2faSetup: DISABLE_2FA ? false : me.needs2faSetup };
       return req.session.save(() => res.json({ ok: true, user: req.session.user }));
     }
     res.json({ ok: true });
