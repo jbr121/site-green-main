@@ -1,0 +1,95 @@
+GOLD SKULL — como ligar a loja
+================================
+
+1) Instale o Node.js (se ainda não tiver):
+   https://nodejs.org  (versão LTS)
+
+2) Nesta pasta, clique com o botão direito e abra o terminal.
+   Depois rode:
+
+   npm install
+   npm start
+
+3) Abra no navegador:
+   Loja:   http://localhost:3000
+   Painel: http://localhost:3000/admin
+
+LOGIN DO PAINEL
+---------------
+Usuário: admin
+Senha:   goldskull
+
+>>> O painel VAI EXIGIR a troca dessa senha no primeiro acesso. <<<
+A nova senha precisa ter 8 caracteres ou mais e não pode ser óbvia.
+Se você instalar a loja em outro computador/servidor do zero, o próprio
+programa cria uma senha aleatória e mostra ela no terminal na primeira vez.
+
+COMO ANUNCIAR UM PRODUTO
+------------------------
+1. Entre no painel
+2. Clique em "+ Anunciar produto"
+3. Coloque nome, preço, categoria e foto
+4. Se a marca tem sabores, escreva um por linha em "Sabores iniciais"
+5. Clique em "Salvar produto"
+O item aparece na loja na hora.
+
+FOTO DE CADA SABOR
+------------------
+Cada marca de pod pode ter vários sabores, e cada sabor pode ter a
+própria foto.
+
+1. Na lista de produtos, clique no botão 🎨 (ou em "Gerenciar sabores")
+2. Toque no quadradinho da esquerda do sabor para escolher a foto dele
+3. Use "Disponível / Esgotado" para o cliente não conseguir pedir um
+   sabor que acabou (o sabor continua aparecendo na loja)
+4. As setas ↑ ↓ mudam a ordem que o cliente vê
+5. O nome pode ser editado direto no campo, e a foto é mantida
+
+Na loja, quando o cliente toca no sabor, a foto grande troca para a
+foto daquele sabor.
+
+COMO TIRAR UM PRODUTO
+---------------------
+No painel, na lista, clique em 🗑 (Tirar).
+
+COMO CRIAR ACESSO PARA OUTRA PESSOA
+-----------------------------------
+Acessos > preencha nome, usuário e senha > Criar acesso.
+A pessoa entra no mesmo endereço /admin.
+
+- Editor: mexe em produtos, sabores e estoque.
+- Administrador: mexe em tudo, inclusive acessos, loja e logs.
+
+O botão 🔑 na lista de acessos redefine a senha de alguém. Quem recebe
+uma senha redefinida é obrigado a criar outra no próximo login.
+
+LOGS (só administrador)
+-----------------------
+A aba "Logs" mostra tudo que foi feito no painel: quem entrou, quem
+editou o quê (com o valor antes e depois), fotos enviadas, produtos
+excluídos, tentativas de login erradas e acessos bloqueados.
+
+- Filtre por ação, pessoa, data ou texto
+- "Baixar CSV" salva a planilha para guardar fora do servidor
+- "Apagar logs" arquiva os registros na pasta backups/ (pede sua senha)
+
+Vale olhar essa aba de vez em quando. Muitos itens em vermelho
+("Alertas") significa que alguém está tentando entrar sem permissão.
+
+PEDIDOS
+-------
+O cliente monta a sacola e clica em "Finalizar no WhatsApp".
+A mensagem chega pronta no número cadastrado da loja.
+
+SEGURANÇA — O QUE NUNCA FAZER
+-----------------------------
+1. Não deixe a senha padrão. Troque no primeiro acesso.
+2. Não mande a pasta "data" nem "backups" para o GitHub. Elas têm as
+   senhas (embaralhadas) e os logs com IPs. O arquivo .gitignore já
+   bloqueia isso — não mexa nele.
+3. Ao publicar na internet, use HTTPS e defina a variável
+   SESSION_SECRET. Sem isso o programa se recusa a subir em produção.
+   Veja DEPLOY.md.
+4. Faça backup: npm run backup (gera cópia em backups/).
+
+Para parar o site, feche a janela do terminal ou aperte Ctrl+C.

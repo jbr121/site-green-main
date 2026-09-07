@@ -1,0 +1,31 @@
+{
+  "name": "gold-skull",
+  "version": "1.1.0",
+  "description": "Loja GOLD SKULL — catálogo dinâmico com painel de produtos",
+  "main": "server.js",
+  "private": true,
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "pages": "node scripts/prepare-pages.js --build",
+    "import": "node scripts/import-kyte.js",
+    "backup": "node scripts/backup-db.js",
+    "reset-2fa": "node scripts/reset-2fa.js",
+    "icons": "node scripts/make-icons.js",
+    "secret": "node -e \"console.log(require('crypto').randomBytes(48).toString('hex'))\"",
+    "audit:security": "npm audit --omit=dev"
+  },
+  "dependencies": {
+    "express": "^4.22.2",
+    "express-rate-limit": "^8.7.0",
+    "express-session": "^1.19.0",
+    "helmet": "^8.3.0",
+    "multer": "^2.3.0",
+    "qrcode": "^1.5.4"
+  },
+  "overrides": {
+    "qs": "^6.16.0"
+  }
+}

@@ -1,0 +1,57 @@
+{
+  "settings": {
+    "name": "GOLD SKULL",
+    "tagline": "Loja online de produtos de THC",
+    "extra": "Produtos Premium · Delta-9 · Live Resin · Live Rosin · Liquid Diamond · Pods THC\nAtendimento para clientes exclusivos · Entrega rápida e discreta",
+    "whatsapp": "",
+    "address": "Santa Catarina",
+    "themeColor": "#ffbe0e",
+    "banner": "/img/hero-default.svg",
+    "payments": [
+      "Pix (solicite a chave no atendimento)",
+      "Cartão via link de pagamento"
+    ],
+    "shipping": [
+      {
+        "name": "Itajaí",
+        "price": 15,
+        "description": "Motoboy — entrega rápida na cidade"
+      },
+      {
+        "name": "Joinville",
+        "price": 15,
+        "description": "Motoboy — entrega rápida na cidade"
+      },
+      {
+        "name": "Outras cidades",
+        "price": 50,
+        "description": "Transportadora — envio para todo o Brasil"
+      }
+    ],
+    "checkoutMessage": "Sem cadastro. O pedido abre no WhatsApp da loja para confirmar pagamento e entrega.",
+    "promoBar": {
+      "active": false,
+      "text": "",
+      "ctaLabel": "",
+      "action": "catalogo",
+      "value": ""
+    },
+    "promos": [],
+    "coupons": [],
+    "referral": {
+      "enabled": true,
+      "referrerBonus": 10,
+      "referredBonus": 5,
+      "orderCashbackPercent": 2
+    }
+  },
+  "categories": [
+    "Itajaí",
+    "Joinville",
+    "Atacado"
+  ],
+  "products": [],
+  "users": [],
+  "customers": [],
+  "ledger": []
+}

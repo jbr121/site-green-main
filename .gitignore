@@ -1,0 +1,21 @@
+node_modules/
+tmp-js/
+.pages-dist/
+.DS_Store
+*.log
+
+# Dados da loja: hash de senhas, logs de acesso e fotos. Nunca versionar.
+# O servidor recria data/db.json a partir de db.seed.json na primeira execução.
+/data/
+/backups/
+public/uploads/
+
+# Segredos
+.env
+.env.*
+!.env.example
+
+# Scripts de sonda/import com chaves de API de terceiros
+scripts/probe-variants.js
+scripts/probe-variants2.js
+scripts/import-kyte.js
