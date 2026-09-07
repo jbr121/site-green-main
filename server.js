@@ -49,15 +49,32 @@ fs.mkdirSync(BACKUPS, { recursive: true });
 function resolveSessionSecret() {
   const secret = process.env.SESSION_SECRET;
   if (secret && secret.length >= 32) return secret;
-  if (PROD) {
+  const hosted = process.env.RAILWAY_ENVIRONMENT || process.env.RENDER || process.env.FLY_APP_NAME;
+  if (PROD && !hosted) {
     console.error(
       "[FATAL] Defina SESSION_SECRET com pelo menos 32 caracteres aleatórios antes de subir em produção.\n" +
         '        Gere uma: node -e "console.log(require(\'crypto\').randomBytes(48).toString(\'hex\'))"'
     );
     process.exit(1);
   }
-  if (secret) console.warn("[AVISO] SESSION_SECRET muito curto — usando chave temporária de desenvolvimento.");
-  return crypto.randomBytes(48).toString("hex");
+  const secretFile = path.join(DATA_DIR, ".session-secret");
+  try {
+    if (fs.existsSync(secretFile)) {
+      const saved = fs.readFileSync(secretFile, "utf8").trim();
+      if (saved.length >= 32) return saved;
+    }
+  } catch {
+    /* segue para gerar */
+  }
+  if (secret) console.warn("[AVISO] SESSION_SECRET muito curto — usando chave temporária.");
+  else if (PROD) console.warn("[AVISO] SESSION_SECRET ausente neste host — gerando chave temporária de teste.");
+  const generated = crypto.randomBytes(48).toString("hex");
+  try {
+    fs.writeFileSync(secretFile, generated);
+  } catch {
+    /* se não gravar, a sessão muda a cada restart */
+  }
+  return generated;
 }
 const SESSION_SECRET = resolveSessionSecret();
 
