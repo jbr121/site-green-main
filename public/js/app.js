@@ -17,7 +17,7 @@
   const CASHBOXES = [
     { id: 'Itajaí', title: 'Itajaí e região', hint: 'Entrega de motoboy', confirm: 'Confirmo que estou em Itajaí e região' },
     { id: 'Joinville', title: 'Joinville e região', hint: 'Entrega de motoboy', confirm: 'Confirmo que estou em Joinville e região' },
-    { id: 'Atacado', title: 'Brasil', hint: '', confirm: 'Confirmo envio para o Brasil' },
+    { id: 'Atacado', title: 'Resto do Brasil', hint: '', confirm: 'Confirmo envio para o resto do Brasil' },
   ];
 
   const state = {
