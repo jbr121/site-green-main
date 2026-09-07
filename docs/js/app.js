@@ -7,6 +7,8 @@
     store: {},
     promos: [],
     promoBar: null,
+    coupons: [],
+    referral: { enabled: true, referrerBonus: 10, referredBonus: 5, orderCashbackPercent: 2 },
     categories: [],
     products: [],
     activeCategory: DEFAULT_CATEGORY,
@@ -18,6 +20,10 @@
     pay: '',
     checkoutStep: 1,
     cityConfirmed: false,
+    locationReady: false,
+    customer: null,
+    appliedCoupon: null,
+    useCashback: false,
   };
 
   const $ = (sel) => document.querySelector(sel);
@@ -114,11 +120,87 @@
     $('#age-yes').addEventListener('click', () => {
       localStorage.setItem('gs_age', 'ok');
       $('#age-gate').classList.add('hidden');
-      document.body.style.overflow = '';
-      // Reaplica o reveal depois do gate, senão a animação já “passou” atrás do blur
+      if (state.store.shipping && state.store.shipping.length) initLocationGate();
+      else if (!state.locationReady) document.body.style.overflow = '';
       document.querySelectorAll('.reveal.in').forEach((el) => el.classList.remove('in'));
       requestAnimationFrame(() => watchReveals());
     });
+  }
+
+  /* ---------- localização na entrada ---------- */
+  function loadLocation() {
+    try {
+      return JSON.parse(localStorage.getItem('gs_location')) || null;
+    } catch {
+      return null;
+    }
+  }
+  function saveLocation() {
+    localStorage.setItem('gs_location', JSON.stringify({
+      shipId: state.shipId,
+      confirmed: true,
+      at: Date.now(),
+    }));
+  }
+  function applySavedLocation() {
+    const loc = loadLocation();
+    if (!loc || !loc.confirmed) return false;
+    if (loc.at && Date.now() - loc.at > 30 * 24 * 60 * 60 * 1000) return false;
+    const ship = (state.store.shipping || []).find((s) => s.id === loc.shipId);
+    if (!ship) return false;
+    state.shipId = loc.shipId;
+    state.cityConfirmed = true;
+    state.locationReady = true;
+    return true;
+  }
+  function initLocationGate() {
+    if (applySavedLocation()) {
+      document.body.style.overflow = '';
+      return;
+    }
+    const gate = $('#location-gate');
+    if (!gate) return;
+    gate.classList.remove('hidden');
+    document.body.style.overflow = 'hidden';
+    renderLocationChoices();
+  }
+  function renderLocationChoices() {
+    const wrap = $('#location-choices');
+    const ships = state.store.shipping || [];
+    if (!wrap || !ships.length) return;
+    const choiceBtn = (sh) => `<button type="button" class="choice city-choice location-choice ${state.shipId === sh.id ? 'selected' : ''}" data-ship="${esc(sh.id)}">
+        <span><strong>${esc(sh.name)}</strong><small>${esc(shipChoiceHint(sh))}</small></span>
+        <span class="city-choice-price">${money(sh.price)}</span>
+      </button>`;
+    wrap.innerHTML = ships.map(choiceBtn).join('');
+    wrap.querySelectorAll('[data-ship]').forEach((b) =>
+      b.addEventListener('click', () => {
+        state.shipId = b.dataset.ship;
+        state.cityConfirmed = false;
+        $('#location-confirm').checked = false;
+        renderLocationChoices();
+        updateLocationContinue();
+      })
+    );
+    const ship = currentShipping();
+    const text = $('#location-confirm-text');
+    if (text && ship) text.textContent = `Confirmo que estou em ${ship.name} (${money(ship.price)} de entrega)`;
+    updateLocationContinue();
+  }
+  function updateLocationContinue() {
+    const btn = $('#location-continue');
+    const box = $('#location-confirm');
+    if (btn) btn.disabled = !(box && box.checked && currentShipping());
+  }
+  function closeLocationGate() {
+    const gate = $('#location-gate');
+    if (gate) gate.classList.add('hidden');
+    state.locationReady = true;
+    state.cityConfirmed = true;
+    saveLocation();
+    document.body.style.overflow = '';
+    document.querySelectorAll('.reveal.in').forEach((el) => el.classList.remove('in'));
+    requestAnimationFrame(() => watchReveals());
   }
 
   /* ---------- data ---------- */
@@ -144,6 +226,8 @@
       };
       state.promoBar = s.promoBar && s.promoBar.text ? s.promoBar : null;
       state.promos = Array.isArray(s.promos) ? s.promos.filter((p) => p && p.title).map((p) => ({ ...p, image: asset(p.image || '') })) : [];
+      state.coupons = Array.isArray(s.coupons) ? s.coupons : [];
+      state.referral = s.referral && typeof s.referral === 'object' ? s.referral : state.referral;
       state.categories = (data.categories || []).map((name) => ({ id: name, name }));
       if (!state.categories.some((c) => c.id === state.activeCategory)) {
         state.activeCategory = state.categories.find((c) => c.id !== RETAIL_SKIP)?.id || 'all';
@@ -168,6 +252,8 @@
       renderPromos();
       renderDeals();
       renderGrid();
+      if (localStorage.getItem('gs_age') === 'ok') initLocationGate();
+      loadCustomer();
     } catch {
       $('#grid').innerHTML = '';
       $('#empty').classList.remove('hidden');
@@ -727,13 +813,209 @@
     return (state.store.shipping || []).find((s) => s.id === state.shipId) || (state.store.shipping || [])[0] || null;
   }
 
-  function renderCartBar() {
+  function normalizeCouponCode(code) {
+    return String(code || '').trim().toUpperCase().replace(/[^A-Z0-9_-]/g, '');
+  }
+
+  function findCouponLocal(code) {
+    const norm = normalizeCouponCode(code);
+    return state.coupons.find((c) => normalizeCouponCode(c.code) === norm) || null;
+  }
+
+  function evaluateCouponLocal(coupon, { subtotal, shipPrice }) {
+    if (!coupon) return { error: 'Cupom inválido.' };
+    if (coupon.expiresAt && new Date(coupon.expiresAt) < new Date()) return { error: 'Cupom expirado.' };
+    if (coupon.maxUses != null && Number(coupon.usedCount) >= Number(coupon.maxUses)) return { error: 'Cupom esgotado.' };
+    const min = Number(coupon.minOrder) || 0;
+    if (min > 0 && subtotal < min) return { error: `Pedido mínimo de ${money(min)} para este cupom.` };
+    if (coupon.type === 'percent') {
+      const pct = Math.min(100, Math.max(0, Number(coupon.value) || 0));
+      return { discount: Math.round(subtotal * pct) / 100, freeShipping: false, gift: null, label: `${pct}% de desconto` };
+    }
+    if (coupon.type === 'free_shipping') {
+      return { discount: Math.max(0, Number(shipPrice) || 0), freeShipping: true, gift: null, label: 'Frete grátis' };
+    }
+    if (coupon.type === 'gift') {
+      return {
+        discount: 0,
+        freeShipping: false,
+        gift: { label: coupon.giftLabel || 'Jujuba de brinde', productId: coupon.giftProductId || '' },
+        label: coupon.giftLabel || 'Brinde',
+      };
+    }
+    return { error: 'Cupom inválido.' };
+  }
+
+  function cartTotals() {
     const items = state.cart
       .map((i) => ({ ...i, product: state.products.find((p) => p.id === i.id) }))
       .filter((i) => i.product);
     const subtotal = items.reduce((s, i) => s + i.product.price * i.qty, 0);
     const ship = currentShipping();
-    const total = subtotal + (ship ? ship.price : 0);
+    const shipPrice = ship ? ship.price : 0;
+    let couponDiscount = 0;
+    let freeShipping = false;
+    let gift = null;
+    if (state.appliedCoupon) {
+      const ev = evaluateCouponLocal(state.appliedCoupon.coupon, { subtotal, shipPrice });
+      if (!ev.error) {
+        couponDiscount = ev.discount || 0;
+        freeShipping = !!ev.freeShipping;
+        gift = ev.gift || null;
+      } else {
+        state.appliedCoupon = null;
+      }
+    }
+    const effectiveShip = freeShipping ? 0 : shipPrice;
+    const afterCoupon = Math.max(0, subtotal - couponDiscount) + effectiveShip;
+    const maxCashback = state.customer ? Math.min(Number(state.customer.cashbackBalance) || 0, afterCoupon) : 0;
+    const cashbackUsed = state.useCashback ? maxCashback : 0;
+    const total = Math.max(0, afterCoupon - cashbackUsed);
+    return { items, subtotal, ship, shipPrice, couponDiscount, freeShipping, gift, effectiveShip, cashbackUsed, total, afterCoupon };
+  }
+
+  /* ---------- conta do cliente ---------- */
+  async function loadCustomer() {
+    if (IS_PAGES) {
+      try {
+        const cached = JSON.parse(localStorage.getItem('gs_customer') || 'null');
+        if (cached) state.customer = cached;
+      } catch { /* ignore */ }
+      renderAccountBtn();
+      return;
+    }
+    try {
+      const res = await fetch('/api/public/customer/me', { credentials: 'same-origin' });
+      const data = await res.json();
+      state.customer = data.customer || null;
+      if (state.customer) fillFromCustomer();
+      renderAccountBtn();
+    } catch { /* offline */ }
+  }
+
+  function fillFromCustomer() {
+    if (!state.customer) return;
+    if (state.customer.name) $('#order-name').value = state.customer.name;
+    if (state.customer.phone) $('#order-phone').value = state.customer.phone;
+    if (state.customer.address) $('#order-address').value = state.customer.address;
+  }
+
+  function renderAccountBtn() {
+    const label = $('#account-label');
+    if (!label) return;
+    if (state.customer) {
+      label.textContent = state.customer.name.split(' ')[0] || 'Conta';
+    } else {
+      label.textContent = 'Entrar';
+    }
+  }
+
+  function openAccount() {
+    $('#account-drawer').classList.remove('hidden');
+    $('#account-backdrop').classList.remove('hidden');
+    document.body.style.overflow = 'hidden';
+    renderAccountPanel();
+  }
+  function closeAccount() {
+    $('#account-drawer').classList.add('hidden');
+    $('#account-backdrop').classList.add('hidden');
+    if ($('#product-modal').classList.contains('hidden') && $('#cart-drawer').classList.contains('hidden')) {
+      document.body.style.overflow = '';
+    }
+  }
+  function renderAccountPanel() {
+    const logged = !!state.customer;
+    $('#account-logged').classList.toggle('hidden', !logged);
+    $('#account-guest').classList.toggle('hidden', logged);
+    if (logged) {
+      $('#account-name').textContent = state.customer.name;
+      $('#account-balance').textContent = money(state.customer.cashbackBalance);
+      $('#account-ref-code').textContent = state.customer.referralCode;
+    }
+  }
+
+  async function customerLogin(phone, pin) {
+    if (IS_PAGES) return toast('Login disponível só com o servidor da loja ligado.');
+    const res = await fetch('/api/public/customer/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({ phone, pin }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Falha no login');
+    state.customer = data.customer;
+    fillFromCustomer();
+    renderAccountBtn();
+    renderAccountPanel();
+    renderCart();
+    toast(`Bem-vindo, ${state.customer.name.split(' ')[0]}!`);
+  }
+
+  async function customerRegister(body) {
+    if (IS_PAGES) return toast('Cadastro disponível só com o servidor da loja ligado.');
+    const res = await fetch('/api/public/customer/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Falha no cadastro');
+    state.customer = data.customer;
+    fillFromCustomer();
+    renderAccountBtn();
+    renderAccountPanel();
+    renderCart();
+    toast('Conta criada! Seus dados foram salvos.');
+  }
+
+  async function customerLogout() {
+    if (!IS_PAGES) {
+      try {
+        await fetch('/api/public/customer/logout', { method: 'POST', credentials: 'same-origin' });
+      } catch { /* ignore */ }
+    }
+    state.customer = null;
+    state.useCashback = false;
+    localStorage.removeItem('gs_customer');
+    renderAccountBtn();
+    renderAccountPanel();
+    renderCart();
+    toast('Você saiu da conta.');
+  }
+
+  async function applyCouponCode() {
+    const code = normalizeCouponCode($('#coupon-code').value);
+    if (!code) return toast('Digite o código do cupom');
+    const totals = cartTotals();
+    if (IS_PAGES) {
+      const coupon = findCouponLocal(code);
+      if (!coupon) return toast('Cupom não encontrado');
+      const ev = evaluateCouponLocal(coupon, { subtotal: totals.subtotal, shipPrice: totals.shipPrice });
+      if (ev.error) return toast(ev.error);
+      state.appliedCoupon = { code: coupon.code, coupon, ...ev };
+    } else {
+      try {
+        const res = await fetch('/api/public/coupon/validate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ code, subtotal: totals.subtotal, shipPrice: totals.shipPrice }),
+        });
+        const data = await res.json();
+        if (!res.ok) return toast(data.error || 'Cupom inválido');
+        const coupon = findCouponLocal(code) || { code: data.code, type: data.type };
+        state.appliedCoupon = { code: data.code, coupon, ...data };
+      } catch {
+        return toast('Erro ao validar cupom');
+      }
+    }
+    renderCart();
+    toast(`Cupom ${state.appliedCoupon.label || code} aplicado!`);
+  }
+
+  function renderCartBar() {
+    const { total } = cartTotals();
     const bar = $('#cart-bar');
     const n = state.cart.reduce((s, i) => s + i.qty, 0);
     if (bar) bar.classList.toggle('hidden', n === 0);
@@ -763,6 +1045,7 @@
 
   function validateCheckoutStep(step) {
     if (step === 1) {
+      if (state.locationReady && state.cityConfirmed) return true;
       if (!currentShipping()) { toast('Escolha sua região de entrega'); return false; }
       if (!state.cityConfirmed) { toast('Marque a confirmação da cidade'); return false; }
       return true;
@@ -790,9 +1073,7 @@
 
   function renderCart() {
     const wrap = $('#cart-items');
-    const items = state.cart
-      .map((i) => ({ ...i, product: state.products.find((p) => p.id === i.id) }))
-      .filter((i) => i.product);
+    const { items, subtotal, ship, shipPrice, couponDiscount, freeShipping, gift, effectiveShip, cashbackUsed, total } = cartTotals();
     const has = items.length > 0;
     $('#cart-empty').classList.toggle('hidden', has);
     $('#cart-foot').classList.toggle('hidden', !has);
@@ -820,6 +1101,9 @@
       </div>`;
       })
       .join('');
+    if (gift && has) {
+      wrap.innerHTML += `<div class="cart-gift">🎁 Brinde: ${esc(gift.label)}</div>`;
+    }
     wrap.querySelectorAll('button').forEach((b) =>
       b.addEventListener('click', () => {
         const { act, key } = b.dataset;
@@ -827,14 +1111,44 @@
         else setQty(key, (state.cart.find((i) => cartKey(i.id, i.option) === key)?.qty || 1) + (act === 'plus' ? 1 : -1));
       })
     );
-    const subtotal = items.reduce((s, i) => s + i.product.price * i.qty, 0);
-    const ship = currentShipping();
-    const total = subtotal + (ship ? ship.price : 0);
     $('#cart-subtotal').textContent = money(subtotal);
-    $('#cart-shipping').textContent = ship ? money(ship.price) : 'A combinar';
+    $('#cart-shipping').textContent = freeShipping ? 'Grátis' : (ship ? money(effectiveShip) : 'A combinar');
     $('#cart-total').textContent = money(total);
     const totalFinal = $('#cart-total-final');
     if (totalFinal) totalFinal.textContent = money(total);
+    const discRow = $('#cart-discount-row');
+    const discEl = $('#cart-discount');
+    if (discRow && discEl) {
+      discRow.classList.toggle('hidden', !(couponDiscount > 0));
+      discEl.textContent = `− ${money(couponDiscount)}`;
+    }
+    const cbRow = $('#cart-cashback-row');
+    const cbEl = $('#cart-cashback');
+    if (cbRow && cbEl) {
+      cbRow.classList.toggle('hidden', !(cashbackUsed > 0));
+      cbEl.textContent = `− ${money(cashbackUsed)}`;
+    }
+    const appliedEl = $('#coupon-applied');
+    if (appliedEl) {
+      if (state.appliedCoupon) {
+        appliedEl.classList.remove('hidden');
+        appliedEl.textContent = `✓ ${state.appliedCoupon.label || state.appliedCoupon.code} — toque aqui para remover`;
+        appliedEl.onclick = () => { state.appliedCoupon = null; renderCart(); toast('Cupom removido'); };
+      } else {
+        appliedEl.classList.add('hidden');
+        appliedEl.onclick = null;
+      }
+    }
+    const cashbackRow = $('#cashback-row');
+    const cashbackLabel = $('#cashback-label');
+    const cashbackCheck = $('#cashback-use');
+    if (cashbackRow && state.customer && (state.customer.cashbackBalance || 0) > 0) {
+      cashbackRow.classList.remove('hidden');
+      if (cashbackLabel) cashbackLabel.textContent = `Usar cashback (${money(state.customer.cashbackBalance)})`;
+      if (cashbackCheck) cashbackCheck.checked = state.useCashback;
+    } else if (cashbackRow) {
+      cashbackRow.classList.add('hidden');
+    }
     const n = state.cart.reduce((s, i) => s + i.qty, 0);
     const summary = $('#cart-summary');
     if (summary) {
@@ -848,10 +1162,10 @@
   }
 
   function openCart() {
-    state.checkoutStep = 1;
-    setCityConfirmed(false);
+    state.checkoutStep = state.locationReady && state.cityConfirmed ? 2 : 1;
+    if (state.locationReady) state.cityConfirmed = true;
     renderCart();
-    setCheckoutStep(1);
+    setCheckoutStep(state.checkoutStep);
     $('#cart-drawer').classList.remove('hidden');
     $('#drawer-backdrop').classList.remove('hidden');
     document.body.style.overflow = 'hidden';
@@ -864,9 +1178,9 @@
     }
   }
 
-  function checkout() {
+  async function checkout() {
     if (!state.cart.length) return;
-    if (!state.cityConfirmed) {
+    if (!state.cityConfirmed && !state.locationReady) {
       setCheckoutStep(1);
       toast('Marque a confirmação da cidade');
       return;
@@ -882,12 +1196,53 @@
     const pay = state.pay || 'A combinar';
     if (!state.store.whatsapp) { toast('WhatsApp da loja não configurado'); return; }
     saveGuest();
-    const items = state.cart
-      .map((i) => ({ ...i, product: state.products.find((p) => p.id === i.id) }))
-      .filter((i) => i.product);
-    const ship = currentShipping();
-    const subtotal = items.reduce((s, i) => s + i.product.price * i.qty, 0);
-    const shipPrice = ship ? ship.price : 0;
+
+    let totals = cartTotals();
+    let checkoutMeta = null;
+
+    if (state.appliedCoupon && !IS_PAGES && !state.customer) {
+      try {
+        await fetch('/api/public/coupon/redeem', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            code: state.appliedCoupon.code,
+            subtotal: totals.subtotal,
+            shipPrice: totals.shipPrice,
+          }),
+        });
+      } catch { /* segue mesmo se falhar */ }
+    }
+
+    if (state.customer && !IS_PAGES) {
+      try {
+        const res = await fetch('/api/public/customer/checkout', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify({
+            subtotal: totals.subtotal,
+            shipPrice: totals.shipPrice,
+            cashbackUse: state.useCashback ? totals.cashbackUsed : 0,
+            couponCode: state.appliedCoupon ? state.appliedCoupon.code : '',
+          }),
+        });
+        const data = await res.json();
+        if (res.ok) {
+          checkoutMeta = data;
+          state.customer = data.customer;
+          totals = cartTotals();
+          if (state.customer) await fetch('/api/public/customer/profile', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({ name, address }),
+          }).catch(() => {});
+        }
+      } catch { /* segue sem cashback server-side */ }
+    }
+
+    const { items, subtotal, ship, couponDiscount, freeShipping, gift, effectiveShip, cashbackUsed, total } = totals;
     const lines = items.map((i) => `• ${i.qty}x ${i.product.name}${i.option ? ` (${i.option})` : ''} — ${money(i.product.price * i.qty)}`);
     const msg = [
       `*Novo pedido — ${state.store.name}*`,
@@ -896,18 +1251,28 @@
       `*Cliente:* ${name}`,
       `*WhatsApp do cliente:* ${phone}`,
       `*Entrega em:* ${address}`,
-      `*Frete:* ${ship ? `${ship.name} (${money(ship.price)})` : 'A combinar'}`,
+      `*Frete:* ${freeShipping ? 'Grátis' : (ship ? `${ship.name} (${money(effectiveShip)})` : 'A combinar')}`,
       `*Pagamento:* ${pay}`,
+      ...(state.appliedCoupon ? [`*Cupom:* ${state.appliedCoupon.code} (${state.appliedCoupon.label || ''})`] : []),
+      ...(gift ? [`*Brinde:* ${gift.label}`] : []),
+      ...(cashbackUsed > 0 ? [`*Cashback usado:* ${money(cashbackUsed)}`] : []),
+      ...(checkoutMeta && checkoutMeta.cashbackEarned > 0 ? [`*Cashback ganho:* ${money(checkoutMeta.cashbackEarned)}`] : []),
       '',
       '*Itens:*',
       ...lines,
       '',
       `Subtotal: ${money(subtotal)}`,
-      `Entrega: ${ship ? money(shipPrice) : 'A combinar'}`,
-      `*Total: ${money(subtotal + shipPrice)}*`,
+      ...(couponDiscount > 0 ? [`Desconto: − ${money(couponDiscount)}`] : []),
+      `Entrega: ${freeShipping ? 'Grátis' : (ship ? money(effectiveShip) : 'A combinar')}`,
+      ...(cashbackUsed > 0 ? [`Cashback: − ${money(cashbackUsed)}`] : []),
+      `*Total: ${money(checkoutMeta ? checkoutMeta.total : total)}*`,
       ...(note ? ['', `Obs: ${note}`] : []),
     ].join('\n');
     window.open(`https://wa.me/${state.store.whatsapp}?text=${encodeURIComponent(msg)}`, '_blank');
+    state.appliedCoupon = null;
+    state.useCashback = false;
+    renderAccountBtn();
+    renderCart();
     toast('Abriu o WhatsApp. Agora aperte ENVIAR.');
   }
 
@@ -985,7 +1350,7 @@
   $('#cart-bar-open').addEventListener('click', openCart);
   $('#cart-close').addEventListener('click', closeCart);
   $('#modal-close').addEventListener('click', closeModal);
-  $('#drawer-backdrop').addEventListener('click', () => { closeModal(); closeCart(); });
+  $('#drawer-backdrop').addEventListener('click', () => { closeModal(); closeCart(); closeAccount(); });
   $('#checkout-btn').addEventListener('click', checkout);
   $('#wizard-next').addEventListener('click', () => {
     if (!validateCheckoutStep(state.checkoutStep)) return;
@@ -995,6 +1360,58 @@
   $('#wizard-back').addEventListener('click', () => setCheckoutStep(state.checkoutStep - 1));
   $('#city-confirm').addEventListener('change', (e) => {
     state.cityConfirmed = e.target.checked;
+  });
+  const locConfirm = $('#location-confirm');
+  if (locConfirm) {
+    locConfirm.addEventListener('change', updateLocationContinue);
+  }
+  const locContinue = $('#location-continue');
+  if (locContinue) {
+    locContinue.addEventListener('click', () => {
+      if (!locConfirm || !locConfirm.checked) return toast('Confirme sua cidade');
+      closeLocationGate();
+    });
+  }
+  $('#account-open').addEventListener('click', openAccount);
+  $('#account-close').addEventListener('click', closeAccount);
+  $('#account-backdrop').addEventListener('click', closeAccount);
+  $('#account-logout').addEventListener('click', customerLogout);
+  $('#coupon-apply').addEventListener('click', applyCouponCode);
+  $('#cashback-use').addEventListener('change', (e) => {
+    state.useCashback = e.target.checked;
+    renderCart();
+  });
+  document.querySelectorAll('.account-tab').forEach((tab) =>
+    tab.addEventListener('click', () => {
+      document.querySelectorAll('.account-tab').forEach((t) => t.classList.toggle('active', t === tab));
+      const mode = tab.dataset.mode;
+      $('#account-login-form').classList.toggle('hidden', mode !== 'login');
+      $('#account-register-form').classList.toggle('hidden', mode !== 'register');
+    })
+  );
+  $('#account-login-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    try {
+      await customerLogin($('#acc-phone').value.trim(), $('#acc-pin').value);
+      closeAccount();
+    } catch (err) {
+      toast(err.message);
+    }
+  });
+  $('#account-register-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    try {
+      await customerRegister({
+        name: $('#acc-reg-name').value.trim(),
+        phone: $('#acc-reg-phone').value.trim(),
+        address: $('#acc-reg-address').value.trim(),
+        referralCode: $('#acc-reg-ref').value.trim(),
+        pin: $('#acc-reg-pin').value,
+      });
+      closeAccount();
+    } catch (err) {
+      toast(err.message);
+    }
   });
   $('#order-address').addEventListener('blur', () => {
     const conflict = addressConflictsWithShip($('#order-address').value.trim(), currentShipping());
@@ -1014,7 +1431,7 @@
     document.getElementById(id).addEventListener('change', saveGuest);
   });
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') { closeModal(); closeCart(); }
+    if (e.key === 'Escape') { closeModal(); closeCart(); closeAccount(); }
   });
 
   /* ---------- init ---------- */
