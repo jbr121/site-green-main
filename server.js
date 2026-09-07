@@ -540,6 +540,35 @@ function ensureDb() {
 }
 ensureDb();
 
+function applyAdminPasswordReset() {
+  const password = String(process.env.RESET_ADMIN_PASSWORD || "");
+  if (!password) return;
+
+  const problem = passwordProblem(password, "admin");
+  if (problem) {
+    console.warn(`[admin] RESET_ADMIN_PASSWORD ignorado: ${problem}`);
+    return;
+  }
+
+  const markerPath = path.join(DATA_DIR, ".admin-reset-done");
+  const marker = crypto.createHash("sha256").update(password).digest("hex");
+  if (fs.existsSync(markerPath) && fs.readFileSync(markerPath, "utf8") === marker) return;
+
+  const db = readDbFromDisk();
+  const admin = (db.users || []).find((u) => String(u.username).toLowerCase() === "admin");
+  if (!admin) {
+    console.warn("[admin] RESET_ADMIN_PASSWORD ignorado: usuário admin não encontrado.");
+    return;
+  }
+
+  Object.assign(admin, hashPasswordSync(password));
+  admin.mustChangePassword = true;
+  admin.totp = null;
+  saveDb(db);
+  fs.writeFileSync(markerPath, marker);
+  console.log("[admin] senha do usuário admin redefinida por RESET_ADMIN_PASSWORD.");
+}
+
 function importCatalogIfEmpty(db) {
   if (!db || (Array.isArray(db.products) && db.products.length)) return false;
   const storePath = path.join(ROOT, "public", "data", "store.json");
@@ -714,6 +743,7 @@ function migrate() {
   }
 }
 migrate();
+applyAdminPasswordReset();
 
 /* =========================================================================
    RATE LIMITING
