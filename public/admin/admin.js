@@ -168,7 +168,6 @@
   }
   function showPanel() {
     if (state.user && state.user.mustChangePassword) return showPasswordGate();
-    if (state.user && state.user.needs2faSetup) return showTwoFactorSetup();
     hideAllViews();
     $('#panel').classList.remove('hidden');
     const isAdmin = state.user.role === 'admin';
@@ -194,7 +193,6 @@
       }
       state.user = data.user;
       if (data.mustChangePassword) showPasswordGate();
-      else if (data.needs2faSetup) showTwoFactorSetup();
       else showPanel();
     } catch (err) {
       $('#login-error').textContent = err.message;
@@ -1934,7 +1932,6 @@
       state.user = data.user;
       state.csrf = data.csrf || state.csrf;
       if (data.mustChangePassword) showPasswordGate();
-      else if (data.needs2faSetup) showTwoFactorSetup();
       else showPanel();
     } catch {
       // api() já mandou para a tela certa (login, código ou 2FA)

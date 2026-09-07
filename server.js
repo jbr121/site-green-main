@@ -19,8 +19,9 @@ const PORT = Number(process.env.PORT) || 3000;
 const HOST = process.env.HOST || "0.0.0.0";
 const FORCE_HTTPS = /^(1|true|yes|on)$/i.test(process.env.FORCE_HTTPS || "");
 const TRUST_PROXY = process.env.TRUST_PROXY || (PROD ? "1" : "loopback");
-// When true, skip mandatory 2FA requirement (useful for testing / temporary disable)
-const DISABLE_2FA = /^(1|true|yes|on)$/i.test(process.env.DISABLE_2FA || "");
+// 2FA is temporarily disabled while the admin flow is being tested.
+// Set DISABLE_2FA=false to require it again.
+const DISABLE_2FA = !/^(0|false|no|off)$/i.test(process.env.DISABLE_2FA || "true");
 
 // IPs liberados para o painel (vazio = liberado para todos)
 const ADMIN_ALLOW_IPS = String(process.env.ADMIN_ALLOW_IPS || "")
