@@ -39,7 +39,7 @@ const LEDGER_MAX = 20000;
 const COUPON_TYPES = ["percent", "free_shipping", "gift"];
 
 const ROOT = __dirname;
-const DATA_DIR = path.join(ROOT, "data");
+const DATA_DIR = process.env.DATA_DIR || path.join(ROOT, "data");
 const DB_PATH = path.join(DATA_DIR, "db.json");
 const UPLOADS = path.join(DATA_DIR, "uploads");
 const PUBLIC_UPLOADS = path.join(ROOT, "public", "uploads");
