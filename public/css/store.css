@@ -383,14 +383,14 @@ body.store .brand-name {
 
 /* ---------- ofertas (produtos com preço promocional) ---------- */
 .deals-rail {
-  display: grid; grid-auto-flow: column; grid-auto-columns: minmax(180px, 1fr);
+  display: grid; grid-auto-flow: column; grid-auto-columns: minmax(180px, 240px);
   gap: 14px; overflow-x: auto; padding-bottom: 8px; scroll-snap-type: x mandatory;
   scrollbar-width: none;
 }
 .deals-rail::-webkit-scrollbar { display: none; }
 .deals-rail .card { scroll-snap-align: start; }
 @media (min-width: 860px) {
-  .deals-rail { grid-auto-columns: minmax(210px, 1fr); }
+  .deals-rail { grid-auto-columns: minmax(210px, 260px); }
 }
 
 /* ---------- como comprar ---------- */
