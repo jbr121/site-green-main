@@ -523,6 +523,65 @@ function ensureDb() {
 }
 ensureDb();
 
+function importCatalogIfEmpty(db) {
+  if (!db || (Array.isArray(db.products) && db.products.length)) return false;
+  const storePath = path.join(ROOT, "public", "data", "store.json");
+  if (!fs.existsSync(storePath)) return false;
+  let store;
+  try {
+    store = JSON.parse(fs.readFileSync(storePath, "utf8"));
+  } catch {
+    return false;
+  }
+  const s = store.settings || {};
+  if (s.whatsapp) db.settings.whatsapp = String(s.whatsapp).replace(/\D/g, "").slice(0, 20);
+  if (s.checkoutMessage) db.settings.checkoutMessage = str(s.checkoutMessage, 400);
+  if (Array.isArray(s.payments) && s.payments.length) db.settings.payments = s.payments.map((p) => str(p, 120)).filter(Boolean);
+  if (Array.isArray(s.shipping) && s.shipping.length) {
+    db.settings.shipping = s.shipping.map((x) => ({
+      name: str(x && x.name, 60),
+      price: Number(x && x.price) || 0,
+      description: str(x && x.description, 160),
+    })).filter((x) => x.name);
+  }
+  if (Array.isArray(s.coupons) && s.coupons.length) {
+    db.settings.coupons = s.coupons.map((raw) => readCoupon(raw, [])).filter(Boolean);
+  }
+  if (s.referral && typeof s.referral === "object") {
+    db.settings.referral = {
+      enabled: s.referral.enabled !== false,
+      referrerBonus: Math.max(0, Number(s.referral.referrerBonus) || 0),
+      referredBonus: Math.max(0, Number(s.referral.referredBonus) || 0),
+      orderCashbackPercent: Math.min(50, Math.max(0, Number(s.referral.orderCashbackPercent) || 0)),
+    };
+  }
+  if (Array.isArray(store.categories) && store.categories.length) {
+    db.categories = store.categories.map((c) => str(c, 60)).filter(Boolean);
+  }
+  db.products = (store.products || []).map((p) => ({
+    id: str(p.id, 60) || uid("p"),
+    name: str(p.name, 160) || "Produto",
+    description: str(p.description, 4000),
+    price: Number(p.price) || 0,
+    promoPrice: p.promoPrice == null ? null : Number(p.promoPrice),
+    category: str(p.category, 60),
+    image: str(p.image, 300),
+    stock: p.stock == null ? null : Number(p.stock),
+    stockActive: !!p.stockActive,
+    pin: !!p.pin,
+    active: p.active !== false,
+    optionGroup: str(p.optionGroup, 80),
+    options: (Array.isArray(p.options) ? p.options : []).map((o, i) => ({
+      id: str(o && o.id, 40) || uid("opt"),
+      title: str(o && o.title, 80) || `Opção ${i + 1}`,
+      image: str(o && o.image, 300),
+      available: !(o && o.available === false),
+    })),
+  }));
+  console.log(`[catálogo] importados ${db.products.length} produtos de public/data/store.json`);
+  return true;
+}
+
 function migrate() {
   const db = readDbFromDisk();
   let changed = false;
@@ -606,6 +665,9 @@ function migrate() {
     db.customers = [];
     changed = true;
   }
+
+  // 2f) catálogo vazio: importa a vitrine estática (útil no primeiro deploy)
+  if (importCatalogIfEmpty(db)) changed = true;
 
   // 3) audit antigo dentro do db.json vai para o arquivo de log
   if (Array.isArray(db.audit)) {
@@ -1024,8 +1086,10 @@ const uploadStaticOptions = {
     res.setHeader("Cross-Origin-Resource-Policy", "same-site");
   },
 };
+const DOCS_UPLOADS = path.join(ROOT, "docs", "uploads");
 app.use("/uploads", express.static(UPLOADS, uploadStaticOptions));
 app.use("/uploads", express.static(PUBLIC_UPLOADS, uploadStaticOptions));
+if (fs.existsSync(DOCS_UPLOADS)) app.use("/uploads", express.static(DOCS_UPLOADS, uploadStaticOptions));
 
 app.get("/robots.txt", (_req, res) => {
   res.type("text/plain").send("User-agent: *\nDisallow: /admin\nDisallow: /api\n");
