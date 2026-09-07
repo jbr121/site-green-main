@@ -479,3 +479,98 @@
 #login-view:not(.hidden) ~ .more-sheet,
 .panel.hidden ~ .admin-dock,
 .panel.hidden ~ .more-sheet { display: none !important; }
+
+/* catálogo organizado por cidade */
+.catalog-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.catalog-stat {
+  text-align: left;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 12px 14px;
+  cursor: pointer;
+}
+.catalog-stat.active {
+  border-color: var(--gold);
+  background: var(--gold-dim);
+}
+.catalog-stat strong { display: block; font-size: 18px; font-family: var(--font-display); }
+.catalog-stat span { display: block; font-size: 11.5px; color: var(--text-2); font-weight: 700; margin-top: 2px; }
+.catalog-stat small { display: block; font-size: 11px; color: var(--text-2); margin-top: 6px; }
+.toolbar-catalog { flex-wrap: wrap; }
+.catalog-count { font-size: 12.5px; color: var(--text-2); font-weight: 700; margin: -6px 0 12px; }
+.catalog-city {
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--bg-2);
+  margin-bottom: 14px;
+  overflow: hidden;
+}
+.catalog-city > summary,
+.catalog-cat > summary {
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 14px 16px;
+  font-weight: 800;
+}
+.catalog-city > summary::-webkit-details-marker,
+.catalog-cat > summary::-webkit-details-marker { display: none; }
+.catalog-city > summary { background: var(--gold-dim); color: var(--gold-2); font-family: var(--font-display); letter-spacing: 0.04em; }
+.catalog-city > summary em,
+.catalog-cat > summary em { font-style: normal; font-weight: 700; font-size: 12px; color: var(--text-2); }
+.catalog-cat { border-top: 1px solid var(--line); }
+.catalog-cat > summary { font-size: 13.5px; }
+.catalog-city-body { padding: 0 0 8px; }
+.catalog-cat .table-wrap { margin: 0 12px 12px; border-radius: 12px; }
+.catalog-cat .product-cards { padding: 0 10px 10px; }
+.city-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.city-chip {
+  font-size: 10px; font-weight: 800; letter-spacing: 0.04em; text-transform: uppercase;
+  background: var(--gold-dim); color: var(--gold-2); border-radius: 999px; padding: 2px 7px;
+}
+.city-picks { border: 1px dashed var(--line); border-radius: 12px; padding: 12px; margin: 0; }
+.city-picks legend { font-size: 12.5px; font-weight: 700; color: var(--text-2); padding: 0 6px; }
+.city-check-list { display: flex; flex-wrap: wrap; gap: 8px; }
+.city-check {
+  display: inline-flex; align-items: center; gap: 8px;
+  background: var(--bg-3); border: 1px solid var(--line); border-radius: 999px;
+  padding: 8px 12px; font-size: 13px; font-weight: 700; cursor: pointer;
+}
+.city-check:has(input:checked) { border-color: var(--gold); background: var(--gold-dim); }
+.city-picks .hint { margin: 8px 0 0; }
+.profit-toolbar { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 14px; }
+.profit-toolbar .period-tabs { margin: 0; flex: 1; }
+.profit-city-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+  margin: 0 0 18px;
+}
+.profit-city-card {
+  background: var(--bg-2); border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px;
+}
+.profit-city-card h4 { font-size: 13px; margin: 0 0 8px; color: var(--gold-2); }
+.profit-city-card p { margin: 0; font-size: 12px; color: var(--text-2); font-weight: 700; }
+.profit-city-card strong { color: var(--text); }
+.profit-city-card .profit-card-kicker {
+  display: block; font-size: 10px; font-weight: 800; letter-spacing: 0.06em;
+  text-transform: uppercase; color: var(--text-2); margin: 0 0 4px;
+}
+.profit-city-card.is-type h4 { color: var(--green); }
+.profit-city-card.is-filtered { border-color: var(--gold); box-shadow: 0 0 0 1px var(--gold); }
+.type-chip {
+  font-size: 10px; font-weight: 800; letter-spacing: 0.04em; text-transform: uppercase;
+  background: var(--bg-3); color: var(--text); border: 1px solid var(--line); border-radius: 999px; padding: 2px 7px;
+}
+@media (max-width: 640px) {
+  .toolbar-catalog .toolbar-select { min-width: calc(50% - 5px); flex: 1; }
+}

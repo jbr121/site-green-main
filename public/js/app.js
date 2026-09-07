@@ -1,7 +1,23 @@
 /* GOLD SKULL — vitrine */
 (() => {
   const RETAIL_SKIP = 'Atacado';
-  const DEFAULT_CATEGORY = 'Itajaí';
+  const DEFAULT_CATEGORY = 'all';
+  const CATALOG_FILTERS = [
+    { id: 'promo', name: 'Promoções' },
+    { id: 'featured', name: 'Destaques' },
+    { id: 'available', name: 'Disponíveis' },
+  ];
+  const CATALOG_SORTS = [
+    { id: 'price-asc', name: 'Menor preço' },
+    { id: 'price-desc', name: 'Maior preço' },
+  ];
+  const CATALOG_FILTER_IDS = new Set(['all', ...CATALOG_FILTERS.map((c) => c.id)]);
+  const CATALOG_SORT_IDS = new Set(['default', ...CATALOG_SORTS.map((c) => c.id)]);
+  const CASHBOXES = [
+    { id: 'Itajaí', title: 'Itajaí e região', hint: 'Entrega de motoboy', confirm: 'Confirmo que estou em Itajaí e região' },
+    { id: 'Joinville', title: 'Joinville e região', hint: 'Entrega de motoboy', confirm: 'Confirmo que estou em Joinville e região' },
+    { id: 'Atacado', title: 'Brasil', hint: '', confirm: 'Confirmo envio para o Brasil' },
+  ];
 
   const state = {
     store: {},
@@ -12,6 +28,8 @@
     categories: [],
     products: [],
     activeCategory: DEFAULT_CATEGORY,
+    catalogFilter: 'all',
+    catalogSort: 'default',
     search: '',
     cart: loadCart(),
     modalProduct: null,
@@ -24,6 +42,8 @@
     customer: null,
     appliedCoupon: null,
     useCashback: false,
+    csrf: '',
+    authEntry: false,
   };
 
   const $ = (sel) => document.querySelector(sel);
@@ -80,6 +100,27 @@
       note: $('#order-note').value.trim(),
     }));
   }
+  function loadCatalogPrefs() {
+    try { return JSON.parse(sessionStorage.getItem('gs_catalog')) || {}; } catch { return {}; }
+  }
+  function saveCatalogPrefs() {
+    try {
+      sessionStorage.setItem('gs_catalog', JSON.stringify({
+        category: state.activeCategory,
+        filter: state.catalogFilter,
+        sort: state.catalogSort,
+      }));
+    } catch { /* sessão cheia ou privada */ }
+  }
+  function applyCatalogPrefs() {
+    const prefs = loadCatalogPrefs();
+    if (prefs.category) state.activeCategory = prefs.category;
+    if (prefs.filter && CATALOG_FILTER_IDS.has(prefs.filter)) state.catalogFilter = prefs.filter;
+    if (prefs.sort && CATALOG_SORT_IDS.has(prefs.sort)) state.catalogSort = prefs.sort;
+  }
+  function isPromo(p) {
+    return !!(p.originalPrice && p.originalPrice > p.price);
+  }
   function fillGuest() {
     const g = loadGuest();
     $('#order-name').value = g.name || '';
@@ -121,7 +162,7 @@
       localStorage.setItem('gs_age', 'ok');
       $('#age-gate').classList.add('hidden');
       if (state.store.shipping && state.store.shipping.length) initLocationGate();
-      else if (!state.locationReady) document.body.style.overflow = '';
+      else initAuthGate();
       document.querySelectorAll('.reveal.in').forEach((el) => el.classList.remove('in'));
       requestAnimationFrame(() => watchReveals());
     });
@@ -154,24 +195,44 @@
     return true;
   }
   function initLocationGate() {
+    if (!(state.store.shipping && state.store.shipping.length)) {
+      state.locationReady = true;
+      initAuthGate();
+      return;
+    }
     if (applySavedLocation()) {
-      document.body.style.overflow = '';
+      refreshCityCatalog();
+      initAuthGate();
       return;
     }
     const gate = $('#location-gate');
-    if (!gate) return;
+    if (!gate) {
+      initAuthGate();
+      return;
+    }
     gate.classList.remove('hidden');
     document.body.style.overflow = 'hidden';
     renderLocationChoices();
   }
+  function shippingOptions() {
+    const order = CASHBOXES.map((c) => c.id);
+    return [...(state.store.shipping || [])].sort((a, b) => {
+      const ia = order.indexOf(cashboxOf(a.name));
+      const ib = order.indexOf(cashboxOf(b.name));
+      return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
+    });
+  }
+
   function renderLocationChoices() {
     const wrap = $('#location-choices');
-    const ships = state.store.shipping || [];
+    const ships = shippingOptions();
     if (!wrap || !ships.length) return;
-    const choiceBtn = (sh) => `<button type="button" class="choice city-choice location-choice ${state.shipId === sh.id ? 'selected' : ''}" data-ship="${esc(sh.id)}">
-        <span><strong>${esc(sh.name)}</strong><small>${esc(shipChoiceHint(sh))}</small></span>
-        <span class="city-choice-price">${money(sh.price)}</span>
+    const choiceBtn = (sh) => {
+      const box = cashboxMeta(sh.name);
+      return `<button type="button" class="choice city-choice location-choice ${state.shipId === sh.id ? 'selected' : ''}" data-ship="${esc(sh.id)}">
+        <span><strong>${esc(box.title)}</strong>${box.hint ? `<small>${esc(box.hint)}</small>` : ''}</span>
       </button>`;
+    };
     wrap.innerHTML = ships.map(choiceBtn).join('');
     wrap.querySelectorAll('[data-ship]').forEach((b) =>
       b.addEventListener('click', () => {
@@ -184,7 +245,7 @@
     );
     const ship = currentShipping();
     const text = $('#location-confirm-text');
-    if (text && ship) text.textContent = `Confirmo que estou em ${ship.name} (${money(ship.price)} de entrega)`;
+    if (text && ship) text.textContent = cashboxMeta(ship.name).confirm;
     updateLocationContinue();
   }
   function updateLocationContinue() {
@@ -198,13 +259,18 @@
     state.locationReady = true;
     state.cityConfirmed = true;
     saveLocation();
-    document.body.style.overflow = '';
-    document.querySelectorAll('.reveal.in').forEach((el) => el.classList.remove('in'));
-    requestAnimationFrame(() => watchReveals());
+    state.activeCategory = 'all';
+    saveCatalogPrefs();
+    renderCategories();
+    renderDeals();
+    renderGrid();
+    renderCartBar();
+    initAuthGate();
   }
 
   /* ---------- data ---------- */
   async function loadCatalog() {
+    applyCatalogPrefs();
     renderSkeleton();
     try {
       const catalogUrl = IS_PAGES ? `${PAGES_BASE}/data/store.json` : '/api/public/store';
@@ -229,8 +295,8 @@
       state.coupons = Array.isArray(s.coupons) ? s.coupons : [];
       state.referral = s.referral && typeof s.referral === 'object' ? s.referral : state.referral;
       state.categories = (data.categories || []).map((name) => ({ id: name, name }));
-      if (!state.categories.some((c) => c.id === state.activeCategory)) {
-        state.activeCategory = state.categories.find((c) => c.id !== RETAIL_SKIP)?.id || 'all';
+      if (state.activeCategory !== 'all' && !state.categories.some((c) => c.id === state.activeCategory)) {
+        state.activeCategory = 'all';
       }
       state.products = (data.products || []).map((p) => ({
         id: p.id,
@@ -240,6 +306,9 @@
         originalPrice: p.promoPrice != null && p.promoPrice < p.price ? p.price : null,
         category: p.category || '',
         categoryId: p.category || '',
+        cities: (Array.isArray(p.cities) && p.cities.length ? p.cities : (p.category ? [p.category] : []))
+          .map(cashboxOf)
+          .filter(Boolean),
         image: asset(p.image || ''),
         featured: !!p.pin,
         outOfStock: !!(p.stockActive && p.stock != null && p.stock <= 0),
@@ -247,13 +316,12 @@
         options: Array.isArray(p.options) ? p.options.map((o) => ({ ...o, image: asset(o.image || '') })) : [],
       }));
       renderStore();
-      applyCategoryShipping(state.activeCategory);
       renderCategories();
       renderPromos();
       renderDeals();
       renderGrid();
+      await loadCustomer();
       if (localStorage.getItem('gs_age') === 'ok') initLocationGate();
-      loadCustomer();
     } catch {
       $('#grid').innerHTML = '';
       $('#empty').classList.remove('hidden');
@@ -296,24 +364,46 @@
   }
 
   function isRemoteShipping(sh) {
-    return /outras|transportadora|correios|sedex|pac/i.test(`${sh.name} ${sh.description}`);
+    return /outras|transportadora|correios|sedex|pac|brasil|atacado/i.test(`${sh.name} ${sh.description}`);
+  }
+
+  function cashboxOf(name) {
+    const t = fold(name);
+    if (t.includes('joinville')) return 'Joinville';
+    if (t.includes('itajai')) return 'Itajaí';
+    if (/(brasil|atacado|outras|remoto|transportadora)/.test(t)) return 'Atacado';
+    return name || '';
+  }
+
+  function cashboxMeta(name) {
+    const id = cashboxOf(name);
+    return CASHBOXES.find((c) => c.id === id) || { id, title: name || id, hint: '', confirm: `Confirmo que estou em ${name || id}` };
+  }
+
+  function shipPriceLabel(ship, amount, free) {
+    if (free) return 'Grátis';
+    if (!ship) return 'A combinar';
+    if (cashboxOf(ship.name) === 'Atacado') return 'A combinar';
+    return money(amount);
+  }
+
+  function orderCityLabel(ship) {
+    if (!ship) return 'A combinar';
+    const box = cashboxMeta(ship.name);
+    return box.id === 'Atacado' ? 'Brasil (Atacado)' : box.title;
   }
 
   function shipKind(sh) {
     if (!sh) return '';
-    if (isRemoteShipping(sh)) return 'remote';
-    const t = fold(`${sh.name} ${sh.description}`);
-    if (t.includes('joinville')) return 'joinville';
-    if (t.includes('itajai')) return 'itajai';
+    const box = cashboxOf(sh.name);
+    if (box === 'Atacado' || isRemoteShipping(sh)) return 'remote';
+    if (box === 'Joinville') return 'joinville';
+    if (box === 'Itajaí') return 'itajai';
     return fold(sh.name);
   }
 
   function shipChoiceHint(sh) {
-    const kind = shipKind(sh);
-    if (kind === 'itajai') return 'só a cidade de Itajaí';
-    if (kind === 'joinville') return 'só a cidade de Joinville';
-    if (kind === 'remote') return 'Balneário, Navegantes, resto do Brasil';
-    return sh.description || '';
+    return cashboxMeta(sh && sh.name).hint || sh.description || '';
   }
 
   const OTHER_CITY_WORDS = ['balneario', 'navegantes', 'camboriu', 'curitiba', 'florianopolis', 'floripa'];
@@ -344,18 +434,65 @@
         || (addr.includes('itajai') && !textHasAny(addr, ['joinville', ...OTHER_CITY_WORDS]))
         || (addr.includes('joinville') && !textHasAny(addr, ['itajai', ...OTHER_CITY_WORDS]));
       if (looksLocal) {
-        return { block: false, message: 'Se mora na cidade de Itajaí ou Joinville, volte e escolha o motoboy de R$ 15.' };
+        return { block: false, message: 'Se mora em Itajaí ou Joinville, volte e escolha a entrega de motoboy.' };
       }
     }
     return null;
   }
 
   function shippingForCategory(cat) {
-    return (state.store.shipping || []).find((s) => s.name === cat);
+    return (state.store.shipping || []).find((s) => cashboxOf(s.name) === cashboxOf(cat));
+  }
+
+  function productCitiesOf(p) {
+    if (Array.isArray(p.cities) && p.cities.length) return p.cities;
+    return p.category ? [p.category] : [];
+  }
+
+  function productMatchesShip(p, ship) {
+    if (!ship) return true;
+    const box = cashboxOf(ship.name);
+    const cities = productCitiesOf(p).map(cashboxOf);
+    if (cities.includes(box)) return true;
+    if (cashboxOf(p.categoryId) === box) return true;
+    if (box === 'Atacado' && (p.categoryId === RETAIL_SKIP || cities.includes('Atacado'))) return true;
+    return false;
+  }
+
+  function cityProducts() {
+    return state.products.filter((p) => productMatchesShip(p, currentShipping()));
+  }
+
+  function catalogCategories() {
+    const citySkip = new Set((state.store.shipping || []).map((s) => fold(s.name)));
+    const seen = new Set();
+    const cats = [];
+    for (const p of cityProducts()) {
+      const name = p.category || '';
+      if (!name || citySkip.has(fold(name))) continue;
+      if (seen.has(name)) continue;
+      seen.add(name);
+      cats.push({ id: name, name });
+    }
+    return cats;
+  }
+
+  function refreshCityCatalog() {
+    if (state.activeCategory !== 'all' && !catalogCategories().some((c) => c.id === state.activeCategory)) {
+      state.activeCategory = 'all';
+      saveCatalogPrefs();
+    }
+    renderCategories();
+    renderDeals();
+    renderGrid();
+    renderCartBar();
   }
 
   function sortProducts(list) {
     return [...list].sort((a, b) => {
+      if (!!a.outOfStock !== !!b.outOfStock) return a.outOfStock ? 1 : -1;
+      if (state.catalogSort === 'price-asc') return (a.price || 0) - (b.price || 0);
+      if (state.catalogSort === 'price-desc') return (b.price || 0) - (a.price || 0);
       if (a.featured !== b.featured) return a.featured ? -1 : 1;
       return a.name.localeCompare(b.name, 'pt-BR');
     });
@@ -383,7 +520,7 @@
   function renderCityConfirm() {
     const ship = currentShipping();
     const text = $('#city-confirm-text');
-    if (text) text.textContent = ship ? `Confirmo que estou em ${ship.name}` : 'Confirmo que estou nessa cidade';
+    if (text) text.textContent = ship ? cashboxMeta(ship.name).confirm : 'Confirmo que estou nessa região';
     const box = $('#city-confirm');
     if (box) box.checked = state.cityConfirmed;
   }
@@ -392,16 +529,18 @@
     const ship = currentShipping();
     const title = $('#city-banner-title');
     if (!title) return;
-    title.textContent = ship ? `Entrega: ${ship.name.toUpperCase()} — ${money(ship.price)}` : 'Entrega';
+    title.textContent = ship ? cashboxMeta(ship.name).title : 'Entrega';
   }
 
   function renderChoices() {
-    const ships = state.store.shipping || [];
-    const choiceBtn = (sh) => `<button type="button" class="choice city-choice ${state.shipId === sh.id ? 'selected' : ''}" data-ship="${esc(sh.id)}">
-          <strong>${esc(sh.name)}</strong>
-          <span class="city-choice-price">${money(sh.price)}</span>
-          <small>${esc(shipChoiceHint(sh))}</small>
+    const ships = shippingOptions();
+    const choiceBtn = (sh) => {
+      const box = cashboxMeta(sh.name);
+      return `<button type="button" class="choice city-choice ${state.shipId === sh.id ? 'selected' : ''}" data-ship="${esc(sh.id)}">
+          <strong>${esc(box.title)}</strong>
+          ${box.hint ? `<small>${esc(box.hint)}</small>` : ''}
         </button>`;
+    };
     $('#shipping-choices').innerHTML = ships.length
       ? `<div class="choice-list">${ships.map(choiceBtn).join('')}</div>`
       : '<p class="cart-note">Combinamos a entrega no WhatsApp.</p>';
@@ -411,6 +550,7 @@
         state.shipId = b.dataset.ship;
         renderChoices();
         renderCart();
+        refreshCityCatalog();
       })
     );
     renderCityConfirm();
@@ -433,17 +573,46 @@
 
   function renderCategories() {
     const nav = $('#categories');
-    const pills = [{ id: 'all', name: 'Todas' }, ...state.categories];
+    if (!nav) return;
+    const pills = [{ id: 'all', name: 'Todas' }, ...catalogCategories()];
     nav.innerHTML = pills
-      .map((c) => `<button class="cat-pill ${c.id === state.activeCategory ? 'active' : ''}" data-cat="${esc(c.id)}">${esc(c.name)}</button>`)
+      .map((c) => `<button type="button" class="cat-pill ${c.id === state.activeCategory ? 'active' : ''}" data-cat="${esc(c.id)}">${esc(c.name)}</button>`)
       .join('');
     nav.querySelectorAll('.cat-pill').forEach((b) =>
       b.addEventListener('click', () => {
         state.activeCategory = b.dataset.cat;
-        applyCategoryShipping(state.activeCategory);
+        saveCatalogPrefs();
         renderCategories();
         renderGrid();
         renderCartBar();
+      })
+    );
+    renderCatalogSorts();
+  }
+
+  function renderCatalogSorts() {
+    const nav = $('#catalog-sorts');
+    if (!nav) return;
+    const pills = [
+      ...CATALOG_SORTS.map((c) => ({ ...c, kind: 'sort' })),
+      ...CATALOG_FILTERS.map((c) => ({ ...c, kind: 'filter' })),
+    ];
+    nav.innerHTML = pills
+      .map((c) => {
+        const on = c.kind === 'sort' ? state.catalogSort === c.id : state.catalogFilter === c.id;
+        return `<button type="button" class="cat-pill ${on ? 'active' : ''}" data-kind="${c.kind}" data-id="${esc(c.id)}">${esc(c.name)}</button>`;
+      })
+      .join('');
+    nav.querySelectorAll('.cat-pill').forEach((b) =>
+      b.addEventListener('click', () => {
+        if (b.dataset.kind === 'sort') {
+          state.catalogSort = state.catalogSort === b.dataset.id ? 'default' : b.dataset.id;
+        } else {
+          state.catalogFilter = state.catalogFilter === b.dataset.id ? 'all' : b.dataset.id;
+        }
+        saveCatalogPrefs();
+        renderCatalogSorts();
+        renderGrid();
       })
     );
   }
@@ -511,15 +680,26 @@
       if (p) { openModal(p.id); return; }
     }
     if (action === 'categoria' && value) {
-      const cat = state.categories.find((c) => fold(c.id) === fold(value));
-      if (cat) {
-        state.activeCategory = cat.id;
-        state.search = '';
-        $('#search').value = '';
-        applyCategoryShipping(cat.id);
-        renderCategories();
-        renderGrid();
-        renderCartBar();
+      const ship = (state.store.shipping || []).find((s) => fold(s.name) === fold(value));
+      if (ship) {
+        state.shipId = ship.id;
+        setCityConfirmed(true);
+        state.activeCategory = 'all';
+        refreshCityCatalog();
+        renderChoices();
+        renderCart();
+      } else {
+        const cat = catalogCategories().find((c) => fold(c.id) === fold(value))
+          || state.categories.find((c) => fold(c.id) === fold(value));
+        if (cat) {
+          state.activeCategory = cat.id;
+          state.search = '';
+          $('#search').value = '';
+          saveCatalogPrefs();
+          renderCategories();
+          renderGrid();
+          renderCartBar();
+        }
       }
     }
     scrollToCatalog();
@@ -568,8 +748,8 @@
   function renderDeals() {
     const section = $('#deals-section');
     const rail = $('#deals-rail');
-    const list = state.products
-      .filter((p) => p.originalPrice && p.originalPrice > p.price && !p.outOfStock && p.categoryId !== RETAIL_SKIP)
+    const list = cityProducts()
+      .filter((p) => p.originalPrice && p.originalPrice > p.price && !p.outOfStock)
       .slice(0, 12);
     section.classList.toggle('hidden', list.length === 0);
     if (!list.length) { rail.innerHTML = ''; return; }
@@ -581,22 +761,14 @@
 
   function filtered() {
     const q = state.search.trim().toLowerCase();
-    let list = state.products.filter((p) => {
-      if (state.activeCategory === 'all') {
-        if (p.categoryId === RETAIL_SKIP) return false;
-      } else if (p.categoryId !== state.activeCategory) return false;
+    const list = cityProducts().filter((p) => {
+      if (state.activeCategory !== 'all' && p.categoryId !== state.activeCategory) return false;
+      if (state.catalogFilter === 'promo' && !isPromo(p)) return false;
+      if (state.catalogFilter === 'featured' && !p.featured) return false;
+      if (state.catalogFilter === 'available' && p.outOfStock) return false;
       if (!q) return true;
-      return [p.name, p.description, p.category].join(' ').toLowerCase().includes(q);
+      return [p.name, p.description, p.category, ...(p.cities || [])].join(' ').toLowerCase().includes(q);
     });
-    if (state.activeCategory === 'all') {
-      const byName = new Map();
-      for (const p of list) {
-        const key = p.name.trim().toLowerCase().replace(/\s+/g, ' ');
-        const prev = byName.get(key);
-        if (!prev || (p.options || []).length > (prev.options || []).length) byName.set(key, p);
-      }
-      list = [...byName.values()];
-    }
     return sortProducts(list);
   }
 
@@ -609,10 +781,18 @@
   function renderGrid() {
     const list = filtered();
     const grid = $('#grid');
+    const ship = currentShipping();
     const catName = state.activeCategory === 'all'
-      ? 'Todas as cidades'
-      : (state.categories.find((c) => c.id === state.activeCategory) || {}).name || 'Produtos';
-    $('#grid-title').textContent = state.search ? `Busca: "${state.search}"` : catName;
+      ? (ship ? cashboxMeta(ship.name).title : 'Catálogo')
+      : (catalogCategories().find((c) => c.id === state.activeCategory) || state.categories.find((c) => c.id === state.activeCategory) || {}).name || 'Produtos';
+    const extras = [];
+    if (state.catalogFilter === 'promo') extras.push('Promoções');
+    if (state.catalogFilter === 'featured') extras.push('Destaques');
+    if (state.catalogFilter === 'available') extras.push('Disponíveis');
+    if (state.catalogSort === 'price-asc') extras.push('Menor preço');
+    if (state.catalogSort === 'price-desc') extras.push('Maior preço');
+    const title = extras.length ? `${catName} · ${extras.join(' · ')}` : catName;
+    $('#grid-title').textContent = state.search ? `Busca: "${state.search}"` : title;
     $('#result-count').textContent = `${list.length} ${list.length === 1 ? 'item' : 'itens'}`;
     $('#empty').classList.toggle('hidden', list.length > 0);
     grid.innerHTML = list.map((p, i) => cardHtml(p, i)).join('');
@@ -750,33 +930,22 @@
     if (!product) return;
     const current = currentShipping();
     if (!current) return;
-    const cat = product.category || '';
-    if (cat === RETAIL_SKIP) {
-      if (!isRemoteShipping(current)) {
-        const remote = (state.store.shipping || []).find((s) => isRemoteShipping(s));
-        if (remote) {
-          askToast(`Esse produto é de Atacado. Trocar entrega para ${remote.name} (${money(remote.price)})?`, () => {
-            state.shipId = remote.id;
-            setCityConfirmed(false);
-            saveCart();
-            renderCart();
-          });
-        }
-      }
-      return;
-    }
-    const regionShip = shippingForCategory(cat);
-    if (!regionShip || regionShip.id === current.id) return;
-    const currentKind = shipKind(current);
-    const nextKind = shipKind(regionShip);
-    if ((currentKind === 'itajai' && nextKind === 'joinville') || (currentKind === 'joinville' && nextKind === 'itajai')) {
-      askToast(`Esse produto é de ${regionShip.name}. Trocar entrega para ${regionShip.name} (${money(regionShip.price)})?`, () => {
-        state.shipId = regionShip.id;
-        setCityConfirmed(false);
-        saveCart();
-        renderCart();
-      });
-    }
+    if (productMatchesShip(product, current)) return;
+    const cities = productCitiesOf(product);
+    const boxes = cities.map(cashboxOf);
+    const target = (state.store.shipping || []).find((s) => boxes.includes(cashboxOf(s.name)))
+      || (product.categoryId === RETAIL_SKIP || boxes.includes('Atacado')
+        ? (state.store.shipping || []).find((s) => cashboxOf(s.name) === 'Atacado' || isRemoteShipping(s))
+        : shippingForCategory(product.category));
+    if (!target || target.id === current.id) return;
+    const label = cashboxMeta(target.name).title;
+    askToast(`Esse produto é de ${label}. Trocar entrega para ${label}?`, () => {
+      state.shipId = target.id;
+      setCityConfirmed(false);
+      saveCart();
+      renderCart();
+      refreshCityCatalog();
+    });
   }
 
   function addToCart(id, qty, option) {
@@ -875,7 +1044,37 @@
   }
 
   /* ---------- conta do cliente ---------- */
+  async function fetchCsrf() {
+    if (IS_PAGES) return '';
+    const res = await fetch('/api/public/csrf', { credentials: 'same-origin' });
+    const data = await res.json().catch(() => ({}));
+    state.csrf = data.csrf || '';
+    return state.csrf;
+  }
+
+  async function storeFetch(url, opts = {}) {
+    const method = String(opts.method || 'GET').toUpperCase();
+    const headers = { ...(opts.headers || {}) };
+    const mutating = method !== 'GET' && method !== 'HEAD';
+    if (mutating) {
+      if (!state.csrf) await fetchCsrf();
+      headers['X-CSRF-Token'] = state.csrf;
+      if (opts.body && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
+    }
+    let res = await fetch(url, { ...opts, method, headers, credentials: 'same-origin' });
+    if (mutating && res.status === 403) {
+      const data = await res.clone().json().catch(() => ({}));
+      if (data.csrf) {
+        await fetchCsrf();
+        headers['X-CSRF-Token'] = state.csrf;
+        res = await fetch(url, { ...opts, method, headers, credentials: 'same-origin' });
+      }
+    }
+    return res;
+  }
+
   async function loadCustomer() {
+    captureReferral();
     if (IS_PAGES) {
       try {
         const cached = JSON.parse(localStorage.getItem('gs_customer') || 'null');
@@ -885,12 +1084,44 @@
       return;
     }
     try {
-      const res = await fetch('/api/public/customer/me', { credentials: 'same-origin' });
+      await fetchCsrf();
+      const res = await storeFetch('/api/public/customer/me');
       const data = await res.json();
       state.customer = data.customer || null;
-      if (state.customer) fillFromCustomer();
+      if (state.customer) {
+        cacheCustomer(state.customer);
+        fillFromCustomer();
+      }
       renderAccountBtn();
     } catch { /* offline */ }
+  }
+
+  function cacheCustomer(customer) {
+    if (!customer) {
+      localStorage.removeItem('gs_customer');
+      return;
+    }
+    localStorage.setItem('gs_customer', JSON.stringify({
+      id: customer.id,
+      name: customer.name,
+      phone: customer.phone,
+      address: customer.address,
+      referralCode: customer.referralCode,
+      cashbackBalance: customer.cashbackBalance,
+      ordersCount: customer.ordersCount,
+    }));
+  }
+
+  function captureReferral() {
+    try {
+      const q = new URLSearchParams(location.search);
+      const code = String(q.get('ref') || q.get('indicacao') || q.get('ind') || '')
+        .toUpperCase()
+        .replace(/[^A-Z0-9]/g, '')
+        .slice(0, 20);
+      if (code) localStorage.setItem('gs_ref', code);
+    } catch { /* ignore */ }
+    return localStorage.getItem('gs_ref') || '';
   }
 
   function fillFromCustomer() {
@@ -898,6 +1129,18 @@
     if (state.customer.name) $('#order-name').value = state.customer.name;
     if (state.customer.phone) $('#order-phone').value = state.customer.phone;
     if (state.customer.address) $('#order-address').value = state.customer.address;
+  }
+
+  function prefillRegister() {
+    const guest = loadGuest();
+    const name = $('#acc-reg-name');
+    const phone = $('#acc-reg-phone');
+    const address = $('#acc-reg-address');
+    const ref = $('#acc-reg-ref');
+    if (name && !name.value) name.value = guest.name || '';
+    if (phone && !phone.value) phone.value = guest.phone || $('#acc-phone').value || '';
+    if (address && !address.value) address.value = guest.address || '';
+    if (ref && !ref.value) ref.value = captureReferral();
   }
 
   function renderAccountBtn() {
@@ -910,79 +1153,186 @@
     }
   }
 
-  function openAccount() {
-    $('#account-drawer').classList.remove('hidden');
-    $('#account-backdrop').classList.remove('hidden');
-    document.body.style.overflow = 'hidden';
-    renderAccountPanel();
+  function onlyDigits(el, max) {
+    if (!el) return;
+    el.addEventListener('input', () => {
+      el.value = el.value.replace(/\D/g, '').slice(0, max);
+    });
   }
-  function closeAccount() {
-    $('#account-drawer').classList.add('hidden');
-    $('#account-backdrop').classList.add('hidden');
-    if ($('#product-modal').classList.contains('hidden') && $('#cart-drawer').classList.contains('hidden')) {
-      document.body.style.overflow = '';
+
+  function setAccountMode(mode) {
+    document.querySelectorAll('.account-tab').forEach((t) => t.classList.toggle('active', t.dataset.mode === mode));
+    $('#account-login-form').classList.toggle('hidden', mode !== 'login');
+    $('#account-register-form').classList.toggle('hidden', mode !== 'register');
+    showAccountError('');
+    if (mode === 'register') prefillRegister();
+  }
+
+  function showAccountError(msg) {
+    const el = $('#account-error');
+    if (!el) return;
+    el.textContent = msg || '';
+    el.classList.toggle('hidden', !msg);
+  }
+
+  function authSkipped() {
+    try {
+      const s = JSON.parse(localStorage.getItem('gs_auth') || 'null');
+      if (!s || !s.skipped) return false;
+      if (s.at && Date.now() - s.at > 30 * 24 * 60 * 60 * 1000) return false;
+      return true;
+    } catch {
+      return false;
     }
   }
+
+  function skipAuth() {
+    localStorage.setItem('gs_auth', JSON.stringify({ skipped: true, at: Date.now() }));
+    closeAccount();
+  }
+
+  function revealStore() {
+    if ($('#age-gate') && !$('#age-gate').classList.contains('hidden')) return;
+    if ($('#location-gate') && !$('#location-gate').classList.contains('hidden')) return;
+    if ($('#account-gate') && !$('#account-gate').classList.contains('hidden')) return;
+    document.body.style.overflow = '';
+    document.querySelectorAll('.reveal.in').forEach((el) => el.classList.remove('in'));
+    requestAnimationFrame(() => watchReveals());
+  }
+
+  function initAuthGate(opts = {}) {
+    const force = !!opts.force;
+    if (!force && state.customer) {
+      revealStore();
+      return;
+    }
+    if (!force && authSkipped()) {
+      revealStore();
+      return;
+    }
+    if ($('#age-gate') && !$('#age-gate').classList.contains('hidden')) return;
+    if ($('#location-gate') && !$('#location-gate').classList.contains('hidden')) return;
+    openAccount({ entry: !force });
+  }
+
+  function openAccount(opts = {}) {
+    const gate = $('#account-gate');
+    if (!gate) return;
+    state.authEntry = !!opts.entry;
+    gate.classList.remove('hidden');
+    document.body.style.overflow = 'hidden';
+    $('#account-close').classList.toggle('hidden', state.authEntry && !state.customer);
+    $('#account-skip').classList.toggle('hidden', !state.authEntry || !!state.customer);
+    $('#account-go').classList.toggle('hidden', !state.authEntry);
+    $('#account-title').textContent = state.customer ? 'Minha conta' : (state.authEntry ? 'Entrar ou criar conta' : 'Sua conta');
+    $('#account-sub').textContent = state.customer
+      ? 'Seus dados já entram no pedido. Compartilhe o código para ganhar cashback.'
+      : 'Salve a entrega e acumule cashback. Ou continue sem cadastro.';
+    showAccountError('');
+    renderAccountPanel();
+    if (!state.customer) {
+      setAccountMode('login');
+      const phone = $('#acc-phone');
+      if (phone && !phone.value) phone.value = loadGuest().phone || '';
+    }
+  }
+
+  function closeAccount() {
+    const gate = $('#account-gate');
+    if (gate) gate.classList.add('hidden');
+    state.authEntry = false;
+    revealStore();
+  }
+
   function renderAccountPanel() {
     const logged = !!state.customer;
     $('#account-logged').classList.toggle('hidden', !logged);
     $('#account-guest').classList.toggle('hidden', logged);
+    $('#account-skip').classList.toggle('hidden', logged || !state.authEntry);
+    $('#account-go').classList.toggle('hidden', !logged || !state.authEntry);
+    $('#account-close').classList.toggle('hidden', state.authEntry && !logged);
     if (logged) {
       $('#account-name').textContent = state.customer.name;
       $('#account-balance').textContent = money(state.customer.cashbackBalance);
       $('#account-ref-code').textContent = state.customer.referralCode;
+      $('#account-title').textContent = 'Minha conta';
     }
   }
 
   async function customerLogin(phone, pin) {
     if (IS_PAGES) return toast('Login disponível só com o servidor da loja ligado.');
-    const res = await fetch('/api/public/customer/login', {
+    const res = await storeFetch('/api/public/customer/login', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'same-origin',
       body: JSON.stringify({ phone, pin }),
     });
-    const data = await res.json();
+    const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || 'Falha no login');
-    state.customer = data.customer;
-    fillFromCustomer();
-    renderAccountBtn();
-    renderAccountPanel();
-    renderCart();
-    toast(`Bem-vindo, ${state.customer.name.split(' ')[0]}!`);
+    if (data.csrf) state.csrf = data.csrf;
+    afterCustomerAuth(data.customer, `Olá, ${data.customer.name.split(' ')[0]}!`);
   }
 
   async function customerRegister(body) {
     if (IS_PAGES) return toast('Cadastro disponível só com o servidor da loja ligado.');
-    const res = await fetch('/api/public/customer/register', {
+    const res = await storeFetch('/api/public/customer/register', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'same-origin',
       body: JSON.stringify(body),
     });
-    const data = await res.json();
+    const data = await res.json().catch(() => ({}));
+    if (res.status === 409) {
+      $('#acc-phone').value = body.phone || '';
+      setAccountMode('login');
+      throw new Error(data.error || 'Esse WhatsApp já tem conta. Entre com o PIN.');
+    }
     if (!res.ok) throw new Error(data.error || 'Falha no cadastro');
-    state.customer = data.customer;
+    if (data.csrf) state.csrf = data.csrf;
+    afterCustomerAuth(
+      data.customer,
+      data.unknownReferral
+        ? 'Conta criada. Código de indicação não encontrado.'
+        : 'Conta criada! Seus dados foram salvos.'
+    );
+  }
+
+  function afterCustomerAuth(customer, msg) {
+    state.customer = customer;
+    cacheCustomer(customer);
+    localStorage.removeItem('gs_auth');
     fillFromCustomer();
+    saveGuest();
     renderAccountBtn();
     renderAccountPanel();
     renderCart();
-    toast('Conta criada! Seus dados foram salvos.');
+    toast(msg);
+    if (!state.authEntry) return;
+    $('#account-go').classList.remove('hidden');
+    $('#account-close').classList.remove('hidden');
   }
 
   async function customerLogout() {
     if (!IS_PAGES) {
       try {
-        await fetch('/api/public/customer/logout', { method: 'POST', credentials: 'same-origin' });
+        await storeFetch('/api/public/customer/logout', { method: 'POST' });
       } catch { /* ignore */ }
     }
     state.customer = null;
     state.useCashback = false;
-    localStorage.removeItem('gs_customer');
+    cacheCustomer(null);
     renderAccountBtn();
     renderAccountPanel();
     renderCart();
     toast('Você saiu da conta.');
+    if (state.authEntry) setAccountMode('login');
+  }
+
+  async function copyReferral() {
+    const code = state.customer && state.customer.referralCode;
+    if (!code) return;
+    try {
+      await navigator.clipboard.writeText(code);
+      toast('Código copiado.');
+    } catch {
+      toast(code);
+    }
   }
 
   async function applyCouponCode() {
@@ -997,9 +1347,8 @@
       state.appliedCoupon = { code: coupon.code, coupon, ...ev };
     } else {
       try {
-        const res = await fetch('/api/public/coupon/validate', {
+        const res = await storeFetch('/api/public/coupon/validate', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ code, subtotal: totals.subtotal, shipPrice: totals.shipPrice }),
         });
         const data = await res.json();
@@ -1112,7 +1461,7 @@
       })
     );
     $('#cart-subtotal').textContent = money(subtotal);
-    $('#cart-shipping').textContent = freeShipping ? 'Grátis' : (ship ? money(effectiveShip) : 'A combinar');
+    $('#cart-shipping').textContent = shipPriceLabel(ship, effectiveShip, freeShipping);
     $('#cart-total').textContent = money(total);
     const totalFinal = $('#cart-total-final');
     if (totalFinal) totalFinal.textContent = money(total);
@@ -1202,9 +1551,8 @@
 
     if (state.appliedCoupon && !IS_PAGES && !state.customer) {
       try {
-        await fetch('/api/public/coupon/redeem', {
+        await storeFetch('/api/public/coupon/redeem', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             code: state.appliedCoupon.code,
             subtotal: totals.subtotal,
@@ -1216,10 +1564,8 @@
 
     if (state.customer && !IS_PAGES) {
       try {
-        const res = await fetch('/api/public/customer/checkout', {
+        const res = await storeFetch('/api/public/customer/checkout', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'same-origin',
           body: JSON.stringify({
             subtotal: totals.subtotal,
             shipPrice: totals.shipPrice,
@@ -1232,10 +1578,8 @@
           checkoutMeta = data;
           state.customer = data.customer;
           totals = cartTotals();
-          if (state.customer) await fetch('/api/public/customer/profile', {
+          if (state.customer) await storeFetch('/api/public/customer/profile', {
             method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            credentials: 'same-origin',
             body: JSON.stringify({ name, address }),
           }).catch(() => {});
         }
@@ -1246,12 +1590,12 @@
     const lines = items.map((i) => `• ${i.qty}x ${i.product.name}${i.option ? ` (${i.option})` : ''} — ${money(i.product.price * i.qty)}`);
     const msg = [
       `*Novo pedido — ${state.store.name}*`,
-      `*CIDADE:* ${ship ? ship.name : 'A combinar'}`,
+      `*CIDADE:* ${orderCityLabel(ship)}`,
       '',
       `*Cliente:* ${name}`,
       `*WhatsApp do cliente:* ${phone}`,
       `*Entrega em:* ${address}`,
-      `*Frete:* ${freeShipping ? 'Grátis' : (ship ? `${ship.name} (${money(effectiveShip)})` : 'A combinar')}`,
+      `*Frete:* ${shipPriceLabel(ship, effectiveShip, freeShipping)}`,
       `*Pagamento:* ${pay}`,
       ...(state.appliedCoupon ? [`*Cupom:* ${state.appliedCoupon.code} (${state.appliedCoupon.label || ''})`] : []),
       ...(gift ? [`*Brinde:* ${gift.label}`] : []),
@@ -1263,7 +1607,7 @@
       '',
       `Subtotal: ${money(subtotal)}`,
       ...(couponDiscount > 0 ? [`Desconto: − ${money(couponDiscount)}`] : []),
-      `Entrega: ${freeShipping ? 'Grátis' : (ship ? money(effectiveShip) : 'A combinar')}`,
+      `Entrega: ${shipPriceLabel(ship, effectiveShip, freeShipping)}`,
       ...(cashbackUsed > 0 ? [`Cashback: − ${money(cashbackUsed)}`] : []),
       `*Total: ${money(checkoutMeta ? checkoutMeta.total : total)}*`,
       ...(note ? ['', `Obs: ${note}`] : []),
@@ -1372,45 +1716,74 @@
       closeLocationGate();
     });
   }
-  $('#account-open').addEventListener('click', openAccount);
+  $('#account-open').addEventListener('click', () => openAccount({ entry: false }));
   $('#account-close').addEventListener('click', closeAccount);
-  $('#account-backdrop').addEventListener('click', closeAccount);
   $('#account-logout').addEventListener('click', customerLogout);
+  const accGo = $('#account-go');
+  if (accGo) accGo.addEventListener('click', closeAccount);
+  const accSkip = $('#account-skip');
+  if (accSkip) accSkip.addEventListener('click', skipAuth);
+  const accCopy = $('#account-copy-ref');
+  if (accCopy) accCopy.addEventListener('click', copyReferral);
+  const accGate = $('#account-gate');
+  if (accGate) {
+    accGate.addEventListener('click', (e) => {
+      if (e.target === accGate && !state.authEntry) closeAccount();
+    });
+  }
+  onlyDigits($('#acc-pin'), 6);
+  onlyDigits($('#acc-reg-pin'), 6);
+  onlyDigits($('#acc-reg-pin2'), 6);
   $('#coupon-apply').addEventListener('click', applyCouponCode);
   $('#cashback-use').addEventListener('change', (e) => {
     state.useCashback = e.target.checked;
     renderCart();
   });
   document.querySelectorAll('.account-tab').forEach((tab) =>
-    tab.addEventListener('click', () => {
-      document.querySelectorAll('.account-tab').forEach((t) => t.classList.toggle('active', t === tab));
-      const mode = tab.dataset.mode;
-      $('#account-login-form').classList.toggle('hidden', mode !== 'login');
-      $('#account-register-form').classList.toggle('hidden', mode !== 'register');
-    })
+    tab.addEventListener('click', () => setAccountMode(tab.dataset.mode))
   );
   $('#account-login-form').addEventListener('submit', async (e) => {
     e.preventDefault();
+    const btn = $('#account-login-btn');
+    const phone = $('#acc-phone').value.trim();
+    const pin = $('#acc-pin').value;
+    if (phone.replace(/\D/g, '').length < 10) return showAccountError('Escreva seu WhatsApp com DDD.');
+    if (!/^\d{4,6}$/.test(pin)) return showAccountError('PIN de 4 a 6 dígitos.');
+    showAccountError('');
+    if (btn) btn.disabled = true;
     try {
-      await customerLogin($('#acc-phone').value.trim(), $('#acc-pin').value);
-      closeAccount();
+      await customerLogin(phone, pin);
     } catch (err) {
-      toast(err.message);
+      showAccountError(err.message);
+    } finally {
+      if (btn) btn.disabled = false;
     }
   });
   $('#account-register-form').addEventListener('submit', async (e) => {
     e.preventDefault();
+    const btn = $('#account-register-btn');
+    const name = $('#acc-reg-name').value.trim();
+    const phone = $('#acc-reg-phone').value.trim();
+    const pin = $('#acc-reg-pin').value;
+    const pin2 = $('#acc-reg-pin2').value;
+    if (!name) return showAccountError('Escreva seu nome.');
+    if (phone.replace(/\D/g, '').length < 10) return showAccountError('Escreva seu WhatsApp com DDD.');
+    if (!/^\d{4,6}$/.test(pin)) return showAccountError('Crie um PIN de 4 a 6 dígitos.');
+    if (pin !== pin2) return showAccountError('Os PINs não são iguais.');
+    showAccountError('');
+    if (btn) btn.disabled = true;
     try {
       await customerRegister({
-        name: $('#acc-reg-name').value.trim(),
-        phone: $('#acc-reg-phone').value.trim(),
+        name,
+        phone,
         address: $('#acc-reg-address').value.trim(),
         referralCode: $('#acc-reg-ref').value.trim(),
-        pin: $('#acc-reg-pin').value,
+        pin,
       });
-      closeAccount();
     } catch (err) {
-      toast(err.message);
+      showAccountError(err.message);
+    } finally {
+      if (btn) btn.disabled = false;
     }
   });
   $('#order-address').addEventListener('blur', () => {
@@ -1431,7 +1804,11 @@
     document.getElementById(id).addEventListener('change', saveGuest);
   });
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') { closeModal(); closeCart(); closeAccount(); }
+    if (e.key === 'Escape') {
+      closeModal();
+      closeCart();
+      if (!state.authEntry) closeAccount();
+    }
   });
 
   /* ---------- init ---------- */

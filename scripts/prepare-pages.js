@@ -95,6 +95,7 @@ function exportStore() {
       stockActive: p.stockActive,
       pin: p.pin,
       optionGroup: p.optionGroup || "",
+      cities: Array.isArray(p.cities) ? p.cities : [],
       options: (Array.isArray(p.options) ? p.options : []).map((o) => ({
         id: o.id,
         title: o.title,

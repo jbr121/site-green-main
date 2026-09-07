@@ -218,6 +218,14 @@ body.store .brand-name {
   color: #17120b; border-color: transparent;
   box-shadow: 0 6px 20px rgba(255, 190, 14, 0.3);
 }
+.catalog-sorts {
+  padding-top: 0;
+  padding-bottom: 12px;
+}
+.catalog-sorts .cat-pill {
+  padding: 7px 14px;
+  font-size: 12px;
+}
 
 /* ---------- hero ---------- */
 .hero {
@@ -679,7 +687,9 @@ body.store .cart-drawer {
 .choice.city-choice { padding: 16px 16px 14px; font-size: 16px; }
 .choice.city-choice strong { font-size: 17px; display: block; margin-bottom: 2px; }
 .choice.city-choice .city-choice-price { color: var(--gold); font-weight: 800; }
-.choice.city-choice small { font-size: 13px; margin-top: 4px; }
+.choice.city-choice small { font-size: 13px; margin-top: 4px; color: var(--gold); font-weight: 700; }
+.location-choice { text-align: left; }
+.location-choice span { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; }
 .city-warn {
   font-size: 13px; font-weight: 700; line-height: 1.45;
   color: #ffd873; background: rgba(255, 196, 34, 0.1);
@@ -758,6 +768,8 @@ body.store .cart-bar {
   }
 
   .header-inner { gap: 8px; padding: 14px 12px 12px; }
+  .categories { padding: 0 12px 8px; }
+  .catalog-sorts { padding-bottom: 10px; }
   .cart-btn { padding: 0 13px; height: 42px; }
   .cart-btn-text { display: none; }
   body.store .brand-mark { width: 34px; height: 34px; }
@@ -876,24 +888,39 @@ body.store .location-box {
   transition: border-color 0.2s, background 0.2s;
 }
 .account-btn:hover { border-color: var(--gold); background: rgba(255, 196, 34, 0.08); }
-.account-drawer {
-  position: fixed; top: 0; right: 0; z-index: 160;
-  width: min(400px, 100vw); height: 100dvh;
-  background: #0b0b10; border-left: 1px solid var(--line);
-  display: flex; flex-direction: column; overflow-y: auto;
-  padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom);
-  animation: slideIn 0.28s var(--ease);
+body.store .account-gate { z-index: 188; }
+.account-box {
+  position: relative;
+  max-width: 420px;
+  max-height: min(92dvh, 760px);
+  overflow-y: auto;
+  text-align: center;
+  padding: 20px 18px 18px;
 }
-.account-panel { padding: 12px 16px 20px; }
-.account-tabs { display: flex; gap: 8px; margin-bottom: 16px; }
+.account-gate-close {
+  position: absolute; top: 12px; right: 12px; z-index: 2;
+}
+.account-box .age-logo { width: 64px; height: 64px; margin-bottom: 6px; }
+.account-box h2 { text-align: center; font-size: 18px; margin-bottom: 4px; }
+.account-box .location-sub { margin-bottom: 12px; font-size: 13px; }
+.account-panel { text-align: left; }
+.account-box .checkout-fields label { margin-bottom: 8px; font-size: 12.5px; }
+.account-box .checkout-fields input { padding: 11px 12px; }
+.account-tabs { display: flex; gap: 8px; margin-bottom: 14px; }
 .account-tab {
   flex: 1; padding: 10px; border-radius: 12px; border: 1px solid var(--line);
   background: transparent; color: var(--text-2); font-weight: 700; cursor: pointer;
 }
 .account-tab.active { border-color: var(--gold); color: var(--gold); background: rgba(255, 196, 34, 0.08); }
-.account-greeting { font-size: 16px; margin-bottom: 8px; }
-.account-balance { color: var(--gold-2); margin-bottom: 8px; }
-.account-ref { font-size: 14px; margin-bottom: 8px; word-break: break-all; }
+.account-greeting { font-size: 16px; margin-bottom: 8px; text-align: center; }
+.account-balance { color: var(--gold-2); margin-bottom: 8px; text-align: center; font-weight: 700; }
+.account-ref { font-size: 14px; margin-bottom: 8px; word-break: break-all; text-align: center; }
+.account-logged-actions { display: flex; gap: 8px; margin: 12px 0 14px; }
+.account-logged-actions .btn { flex: 1; }
+.account-error { color: var(--danger); font-size: 13px; font-weight: 700; margin: 8px 0 0; text-align: center; }
+.account-box .btn-big { width: 100%; margin-top: 8px; }
+.account-box .hint { text-align: center; margin-top: 10px; }
+#account-skip { margin-top: 10px; }
 
 /* ---------- cupom e cashback no pedido ---------- */
 .coupon-row { margin: 12px 0; }

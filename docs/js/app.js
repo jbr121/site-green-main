@@ -1,7 +1,7 @@
 /* GOLD SKULL — vitrine */
 (() => {
   const RETAIL_SKIP = 'Atacado';
-  const DEFAULT_CATEGORY = 'Itajaí';
+  const DEFAULT_CATEGORY = 'all';
 
   const state = {
     store: {},
@@ -156,6 +156,7 @@
   function initLocationGate() {
     if (applySavedLocation()) {
       document.body.style.overflow = '';
+      refreshCityCatalog();
       return;
     }
     const gate = $('#location-gate');
@@ -201,6 +202,11 @@
     document.body.style.overflow = '';
     document.querySelectorAll('.reveal.in').forEach((el) => el.classList.remove('in'));
     requestAnimationFrame(() => watchReveals());
+    state.activeCategory = 'all';
+    renderCategories();
+    renderDeals();
+    renderGrid();
+    renderCartBar();
   }
 
   /* ---------- data ---------- */
@@ -240,6 +246,7 @@
         originalPrice: p.promoPrice != null && p.promoPrice < p.price ? p.price : null,
         category: p.category || '',
         categoryId: p.category || '',
+        cities: Array.isArray(p.cities) && p.cities.length ? p.cities : (p.category ? [p.category] : []),
         image: asset(p.image || ''),
         featured: !!p.pin,
         outOfStock: !!(p.stockActive && p.stock != null && p.stock <= 0),
@@ -247,7 +254,6 @@
         options: Array.isArray(p.options) ? p.options.map((o) => ({ ...o, image: asset(o.image || '') })) : [],
       }));
       renderStore();
-      applyCategoryShipping(state.activeCategory);
       renderCategories();
       renderPromos();
       renderDeals();
@@ -354,6 +360,48 @@
     return (state.store.shipping || []).find((s) => s.name === cat);
   }
 
+  function productCitiesOf(p) {
+    if (Array.isArray(p.cities) && p.cities.length) return p.cities;
+    return p.category ? [p.category] : [];
+  }
+
+  function productMatchesShip(p, ship) {
+    if (!ship) return true;
+    const cities = productCitiesOf(p);
+    if (cities.includes(ship.name)) return true;
+    if (p.categoryId === ship.name) return true;
+    if (isRemoteShipping(ship) && (p.categoryId === RETAIL_SKIP || cities.some((c) => /outras|atacado/i.test(c)))) return true;
+    return false;
+  }
+
+  function cityProducts() {
+    return state.products.filter((p) => productMatchesShip(p, currentShipping()));
+  }
+
+  function catalogCategories() {
+    const citySkip = new Set((state.store.shipping || []).map((s) => fold(s.name)));
+    const seen = new Set();
+    const cats = [];
+    for (const p of cityProducts()) {
+      const name = p.category || '';
+      if (!name || citySkip.has(fold(name))) continue;
+      if (seen.has(name)) continue;
+      seen.add(name);
+      cats.push({ id: name, name });
+    }
+    return cats;
+  }
+
+  function refreshCityCatalog() {
+    if (state.activeCategory !== 'all' && !catalogCategories().some((c) => c.id === state.activeCategory)) {
+      state.activeCategory = 'all';
+    }
+    renderCategories();
+    renderDeals();
+    renderGrid();
+    renderCartBar();
+  }
+
   function sortProducts(list) {
     return [...list].sort((a, b) => {
       if (a.featured !== b.featured) return a.featured ? -1 : 1;
@@ -411,6 +459,7 @@
         state.shipId = b.dataset.ship;
         renderChoices();
         renderCart();
+        refreshCityCatalog();
       })
     );
     renderCityConfirm();
@@ -433,14 +482,13 @@
 
   function renderCategories() {
     const nav = $('#categories');
-    const pills = [{ id: 'all', name: 'Todas' }, ...state.categories];
+    const pills = [{ id: 'all', name: 'Todas' }, ...catalogCategories()];
     nav.innerHTML = pills
       .map((c) => `<button class="cat-pill ${c.id === state.activeCategory ? 'active' : ''}" data-cat="${esc(c.id)}">${esc(c.name)}</button>`)
       .join('');
     nav.querySelectorAll('.cat-pill').forEach((b) =>
       b.addEventListener('click', () => {
         state.activeCategory = b.dataset.cat;
-        applyCategoryShipping(state.activeCategory);
         renderCategories();
         renderGrid();
         renderCartBar();
@@ -511,15 +559,25 @@
       if (p) { openModal(p.id); return; }
     }
     if (action === 'categoria' && value) {
-      const cat = state.categories.find((c) => fold(c.id) === fold(value));
-      if (cat) {
-        state.activeCategory = cat.id;
-        state.search = '';
-        $('#search').value = '';
-        applyCategoryShipping(cat.id);
-        renderCategories();
-        renderGrid();
-        renderCartBar();
+      const ship = (state.store.shipping || []).find((s) => fold(s.name) === fold(value));
+      if (ship) {
+        state.shipId = ship.id;
+        setCityConfirmed(true);
+        state.activeCategory = 'all';
+        refreshCityCatalog();
+        renderChoices();
+        renderCart();
+      } else {
+        const cat = catalogCategories().find((c) => fold(c.id) === fold(value))
+          || state.categories.find((c) => fold(c.id) === fold(value));
+        if (cat) {
+          state.activeCategory = cat.id;
+          state.search = '';
+          $('#search').value = '';
+          renderCategories();
+          renderGrid();
+          renderCartBar();
+        }
       }
     }
     scrollToCatalog();
@@ -568,8 +626,8 @@
   function renderDeals() {
     const section = $('#deals-section');
     const rail = $('#deals-rail');
-    const list = state.products
-      .filter((p) => p.originalPrice && p.originalPrice > p.price && !p.outOfStock && p.categoryId !== RETAIL_SKIP)
+    const list = cityProducts()
+      .filter((p) => p.originalPrice && p.originalPrice > p.price && !p.outOfStock)
       .slice(0, 12);
     section.classList.toggle('hidden', list.length === 0);
     if (!list.length) { rail.innerHTML = ''; return; }
@@ -581,22 +639,11 @@
 
   function filtered() {
     const q = state.search.trim().toLowerCase();
-    let list = state.products.filter((p) => {
-      if (state.activeCategory === 'all') {
-        if (p.categoryId === RETAIL_SKIP) return false;
-      } else if (p.categoryId !== state.activeCategory) return false;
+    const list = cityProducts().filter((p) => {
+      if (state.activeCategory !== 'all' && p.categoryId !== state.activeCategory) return false;
       if (!q) return true;
-      return [p.name, p.description, p.category].join(' ').toLowerCase().includes(q);
+      return [p.name, p.description, p.category, ...(p.cities || [])].join(' ').toLowerCase().includes(q);
     });
-    if (state.activeCategory === 'all') {
-      const byName = new Map();
-      for (const p of list) {
-        const key = p.name.trim().toLowerCase().replace(/\s+/g, ' ');
-        const prev = byName.get(key);
-        if (!prev || (p.options || []).length > (prev.options || []).length) byName.set(key, p);
-      }
-      list = [...byName.values()];
-    }
     return sortProducts(list);
   }
 
@@ -609,9 +656,10 @@
   function renderGrid() {
     const list = filtered();
     const grid = $('#grid');
+    const ship = currentShipping();
     const catName = state.activeCategory === 'all'
-      ? 'Todas as cidades'
-      : (state.categories.find((c) => c.id === state.activeCategory) || {}).name || 'Produtos';
+      ? (ship ? ship.name : 'Catálogo')
+      : (catalogCategories().find((c) => c.id === state.activeCategory) || state.categories.find((c) => c.id === state.activeCategory) || {}).name || 'Produtos';
     $('#grid-title').textContent = state.search ? `Busca: "${state.search}"` : catName;
     $('#result-count').textContent = `${list.length} ${list.length === 1 ? 'item' : 'itens'}`;
     $('#empty').classList.toggle('hidden', list.length > 0);
@@ -750,33 +798,18 @@
     if (!product) return;
     const current = currentShipping();
     if (!current) return;
-    const cat = product.category || '';
-    if (cat === RETAIL_SKIP) {
-      if (!isRemoteShipping(current)) {
-        const remote = (state.store.shipping || []).find((s) => isRemoteShipping(s));
-        if (remote) {
-          askToast(`Esse produto é de Atacado. Trocar entrega para ${remote.name} (${money(remote.price)})?`, () => {
-            state.shipId = remote.id;
-            setCityConfirmed(false);
-            saveCart();
-            renderCart();
-          });
-        }
-      }
-      return;
-    }
-    const regionShip = shippingForCategory(cat);
-    if (!regionShip || regionShip.id === current.id) return;
-    const currentKind = shipKind(current);
-    const nextKind = shipKind(regionShip);
-    if ((currentKind === 'itajai' && nextKind === 'joinville') || (currentKind === 'joinville' && nextKind === 'itajai')) {
-      askToast(`Esse produto é de ${regionShip.name}. Trocar entrega para ${regionShip.name} (${money(regionShip.price)})?`, () => {
-        state.shipId = regionShip.id;
-        setCityConfirmed(false);
-        saveCart();
-        renderCart();
-      });
-    }
+    if (productMatchesShip(product, current)) return;
+    const cities = productCitiesOf(product);
+    const target = (state.store.shipping || []).find((s) => cities.includes(s.name))
+      || (product.categoryId === RETAIL_SKIP ? (state.store.shipping || []).find((s) => isRemoteShipping(s)) : shippingForCategory(product.category));
+    if (!target || target.id === current.id) return;
+    askToast(`Esse produto é de ${target.name}. Trocar entrega para ${target.name} (${money(target.price)})?`, () => {
+      state.shipId = target.id;
+      setCityConfirmed(false);
+      saveCart();
+      renderCart();
+      refreshCityCatalog();
+    });
   }
 
   function addToCart(id, qty, option) {

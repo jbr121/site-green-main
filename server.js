@@ -540,6 +540,150 @@ function ensureDb() {
 }
 ensureDb();
 
+const DEFAULT_CITIES = ["Itajaí", "Joinville", "Atacado"];
+
+function foldKey(s) {
+  return str(s, 80)
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+}
+
+function canonicalizeCity(name) {
+  const t = foldKey(name);
+  if (!t) return "";
+  if (t.includes("joinville")) return "Joinville";
+  if (t.includes("itajai")) return "Itajaí";
+  if (/(brasil|atacado|outras|remoto|transportadora|correios)/.test(t)) return "Atacado";
+  return str(name, 60);
+}
+
+function defaultShippingFor(id) {
+  if (id === "Joinville") return { name: "Joinville", price: 15, description: "Motoboy — entrega rápida na região" };
+  if (id === "Atacado") return { name: "Atacado", price: 0, description: "Brasil" };
+  return { name: "Itajaí", price: 15, description: "Motoboy — entrega rápida na região" };
+}
+
+function normalizeShippingCashboxes(list) {
+  const byBox = new Map();
+  for (const x of Array.isArray(list) ? list : []) {
+    const name = canonicalizeCity(x && x.name);
+    if (!DEFAULT_CITIES.includes(name)) continue;
+    if (byBox.has(name)) continue;
+    const price = Number(x && x.price) || 0;
+    const description = str(x && x.description, 160);
+    byBox.set(name, {
+      name,
+      price: name === "Atacado" ? 0 : price,
+      description: description || defaultShippingFor(name).description,
+    });
+  }
+  return DEFAULT_CITIES.map((id) => byBox.get(id) || defaultShippingFor(id));
+}
+
+function shippingCities(_settings) {
+  return DEFAULT_CITIES.slice();
+}
+
+function parseCitiesInput(raw) {
+  if (Array.isArray(raw)) return raw;
+  if (raw == null || raw === "") return [];
+  if (typeof raw === "string") {
+    const t = raw.trim();
+    if (!t) return [];
+    try {
+      const parsed = JSON.parse(t);
+      if (Array.isArray(parsed)) return parsed;
+    } catch {
+      /* lista simples */
+    }
+    return t.split(/[,|\n]/);
+  }
+  return [];
+}
+
+function normalizeCities(raw, cityNames) {
+  const names = cityNames && cityNames.length ? cityNames : DEFAULT_CITIES;
+  const allowed = new Map(names.map((c) => [foldKey(c), c]));
+  const out = [];
+  const seen = new Set();
+  for (const item of parseCitiesInput(raw)) {
+    const canon = canonicalizeCity(item);
+    if (!canon) continue;
+    const official = allowed.get(foldKey(canon)) || (DEFAULT_CITIES.includes(canon) ? canon : null);
+    if (!official) continue;
+    const key = foldKey(official);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(official);
+  }
+  return out;
+}
+
+function inferProductCities(product, cityNames) {
+  const names = cityNames && cityNames.length ? cityNames : DEFAULT_CITIES;
+  const existing = normalizeCities(product && product.cities, names);
+  if (existing.length) return existing;
+  const fromCat = canonicalizeCity(product && product.category);
+  const match = names.find((c) => foldKey(c) === foldKey(fromCat));
+  if (match) return [match];
+  const other = names.find((c) => foldKey(c) === "atacado") || names[names.length - 1];
+  return other ? [other] : names.slice(0, 1);
+}
+
+const PRODUCT_TYPE_ORDER = ["Pods", "Refis", "Baterias", "Gomas", "Outros"];
+
+function inferProductType(name) {
+  const t = foldKey(name);
+  if (t.includes("goma")) return "Gomas";
+  if (t.includes("bateria")) return "Baterias";
+  if (t.includes("refil")) return "Refis";
+  if (t.includes("pod")) return "Pods";
+  return "Outros";
+}
+
+function isLocationCategory(cat, cityNames) {
+  const t = foldKey(cat);
+  if (!t) return true;
+  if (t === "atacado") return true;
+  return (cityNames || DEFAULT_CITIES).some((c) => foldKey(c) === t);
+}
+
+function recategorizeCatalog(db) {
+  const cityNames = shippingCities(db.settings);
+  let changed = false;
+  for (const p of db.products || []) {
+    const cities = inferProductCities(p, cityNames);
+    if (JSON.stringify(p.cities || []) !== JSON.stringify(cities)) {
+      p.cities = cities;
+      changed = true;
+    }
+    if (isLocationCategory(p.category, cityNames)) {
+      const next = inferProductType(p.name);
+      if (p.category !== next) {
+        p.category = next;
+        changed = true;
+      }
+    }
+  }
+  const used = [...new Set((db.products || []).map((p) => str(p.category, 60)).filter(Boolean))];
+  const nextCats = [];
+  for (const t of PRODUCT_TYPE_ORDER) if (used.includes(t)) nextCats.push(t);
+  for (const c of db.categories || []) {
+    if (isLocationCategory(c, cityNames)) continue;
+    if (!nextCats.includes(c)) nextCats.push(c);
+  }
+  for (const c of used) {
+    if (isLocationCategory(c, cityNames)) continue;
+    if (!nextCats.includes(c)) nextCats.push(c);
+  }
+  if (JSON.stringify(db.categories || []) !== JSON.stringify(nextCats)) {
+    db.categories = nextCats;
+    changed = true;
+  }
+  return changed;
+}
+
 function applyAdminPasswordReset() {
   const password = String(process.env.RESET_ADMIN_PASSWORD || "");
   if (!password) return;
@@ -584,11 +728,7 @@ function importCatalogIfEmpty(db) {
   if (s.checkoutMessage) db.settings.checkoutMessage = str(s.checkoutMessage, 400);
   if (Array.isArray(s.payments) && s.payments.length) db.settings.payments = s.payments.map((p) => str(p, 120)).filter(Boolean);
   if (Array.isArray(s.shipping) && s.shipping.length) {
-    db.settings.shipping = s.shipping.map((x) => ({
-      name: str(x && x.name, 60),
-      price: Number(x && x.price) || 0,
-      description: str(x && x.description, 160),
-    })).filter((x) => x.name);
+    db.settings.shipping = normalizeShippingCashboxes(s.shipping);
   }
   if (Array.isArray(s.coupons) && s.coupons.length) {
     db.settings.coupons = s.coupons.map((raw) => readCoupon(raw, [])).filter(Boolean);
@@ -623,6 +763,7 @@ function importCatalogIfEmpty(db) {
       image: str(o && o.image, 300),
       available: !(o && o.available === false),
     })),
+    cities: inferProductCities(p, shippingCities(db.settings)),
   }));
   console.log(`[catálogo] importados ${db.products.length} produtos de public/data/store.json`);
   return true;
@@ -714,6 +855,44 @@ function migrate() {
 
   // 2f) catálogo vazio: importa a vitrine estática (útil no primeiro deploy)
   if (importCatalogIfEmpty(db)) changed = true;
+
+  // 2g) caixas Itajaí / Joinville / Atacado + categoria de tipo (Pods, Refis...)
+  const nextShip = normalizeShippingCashboxes(db.settings && db.settings.shipping);
+  if (JSON.stringify((db.settings && db.settings.shipping) || []) !== JSON.stringify(nextShip)) {
+    db.settings.shipping = nextShip;
+    changed = true;
+  }
+  if (recategorizeCatalog(db)) changed = true;
+  const cityNames = shippingCities(db.settings);
+  for (const e of db.ledger || []) {
+    const product = db.products.find((p) => p.id === e.productId);
+    const cities = normalizeCities(
+      Array.isArray(e.cities) && e.cities.length ? e.cities : [e.city, e.category],
+      cityNames
+    );
+    const nextCities = cities.length
+      ? cities
+      : product
+        ? inferProductCities(product, cityNames)
+        : inferProductCities({ category: e.category }, cityNames);
+    const nextCity = nextCities[0] || "";
+    let nextCat = str(e.category, 60);
+    if (!nextCat || isLocationCategory(nextCat, cityNames)) {
+      if (product && product.category && !isLocationCategory(product.category, cityNames)) {
+        nextCat = product.category;
+      } else if ((product && product.name) || e.productName) {
+        nextCat = inferProductType((product && product.name) || e.productName);
+      } else {
+        nextCat = "";
+      }
+    }
+    if (JSON.stringify(e.cities || []) !== JSON.stringify(nextCities) || e.city !== nextCity || e.category !== nextCat) {
+      e.cities = nextCities;
+      e.city = nextCity;
+      e.category = nextCat;
+      changed = true;
+    }
+  }
 
   // 3) audit antigo dentro do db.json vai para o arquivo de log
   if (Array.isArray(db.audit)) {
@@ -1162,9 +1341,11 @@ function publicSettings(s) {
     banner: s.banner || "",
     checkoutMessage: s.checkoutMessage || "",
     payments: Array.isArray(s.payments) ? s.payments.map((p) => String(p)) : [],
-    shipping: Array.isArray(s.shipping)
-      ? s.shipping.map((x) => ({ name: String(x.name || ""), price: Number(x.price) || 0, description: String(x.description || "") }))
-      : [],
+    shipping: normalizeShippingCashboxes(s.shipping).map((x) => ({
+      name: x.name,
+      price: Number(x.price) || 0,
+      description: x.description || "",
+    })),
     promoBar: s.promoBar && s.promoBar.active
       ? {
           text: String(s.promoBar.text || ""),
@@ -1198,6 +1379,10 @@ function publicSettings(s) {
   };
 }
 
+app.get("/api/public/csrf", publicLimiter, (req, res) => {
+  res.json({ csrf: csrfToken(req) });
+});
+
 app.get("/api/public/store", (_req, res) => {
   const db = getDb();
   const products = db.products
@@ -1214,6 +1399,7 @@ app.get("/api/public/store", (_req, res) => {
       stockActive: p.stockActive,
       pin: p.pin,
       optionGroup: p.optionGroup || "",
+      cities: Array.isArray(p.cities) && p.cities.length ? p.cities : inferProductCities(p, shippingCities(db.settings)),
       options: (Array.isArray(p.options) ? p.options : []).map((o) => ({
         id: o.id,
         title: o.title,
@@ -1420,12 +1606,14 @@ app.post("/api/public/customer/register", loginLimiter, async (req, res, next) =
     db.customers.push(customer);
     saveDb(db);
 
+    const unknownReferral = !!(referralCode && !referredBy);
+
     req.session.regenerate((err) => {
       if (err) return next(err);
       req.session.customer = { id: customer.id, phone: customer.phone };
       req.session.save((err2) => {
         if (err2) return next(err2);
-        res.json({ customer: customerPublic(customer) });
+        res.json({ customer: customerPublic(customer), unknownReferral, csrf: csrfToken(req) });
       });
     });
   } catch (err) {
@@ -1449,7 +1637,7 @@ app.post("/api/public/customer/login", loginLimiter, async (req, res, next) => {
       req.session.customer = { id: customer.id, phone: customer.phone };
       req.session.save((err2) => {
         if (err2) return next(err2);
-        res.json({ customer: customerPublic(customer) });
+        res.json({ customer: customerPublic(customer), csrf: csrfToken(req) });
       });
     });
   } catch (err) {
@@ -1924,6 +2112,13 @@ function readProductBody(body, existing) {
   }
   if (body.description != null || !existing) out.description = str(body.description, PRODUCT_LIMITS.description);
   if (body.category != null || !existing) out.category = str(body.category, PRODUCT_LIMITS.category) || "Outros";
+  if (body.cities != null || !existing) {
+    const names = shippingCities(getDb().settings);
+    let cities = normalizeCities(body.cities, names);
+    if (!cities.length && existing) cities = inferProductCities({ ...existing, cities: body.cities }, names);
+    if (!cities.length) errors.push("Escolha ao menos uma cidade.");
+    else out.cities = cities;
+  }
 
   if (body.price != null || !existing) {
     const price = optNum(body.price, { min: 0, max: 1e7 });
@@ -1954,7 +2149,7 @@ function readProductBody(body, existing) {
 
 app.get("/api/products", requireAuth, (_req, res) => {
   const db = getDb();
-  res.json({ products: db.products, categories: db.categories });
+  res.json({ products: db.products, categories: db.categories, cities: shippingCities(db.settings) });
 });
 
 app.post("/api/products", requireAuth, uploadLimiter, upload.single("image"), (req, res) => {
@@ -1981,6 +2176,7 @@ app.post("/api/products", requireAuth, uploadLimiter, upload.single("image"), (r
     cost: data.cost ?? null,
     pin: !!data.pin,
     active: data.active !== false,
+    cities: data.cities && data.cities.length ? data.cities : inferProductCities({ category: data.category }, shippingCities(db.settings)),
     createdAt: new Date().toISOString(),
     ...parseOptionPayload(req.body || {}, null),
   };
@@ -2036,7 +2232,7 @@ app.put("/api/products/:id", requireAuth, uploadLimiter, upload.single("image"),
   if (req.file && oldImage && oldImage !== product.image) removeUnusedUpload(db, oldImage);
 
   const changes = diffFields(before, product, [
-    "name", "price", "promoPrice", "cost", "category", "description", "stock", "stockActive", "pin", "active", "image", "optionGroup",
+    "name", "price", "promoPrice", "cost", "category", "cities", "description", "stock", "stockActive", "pin", "active", "image", "optionGroup",
   ]);
   logAction(req, "product.update", {
     targetType: "product",
@@ -2331,12 +2527,16 @@ app.post("/api/stock/move", requireAuth, (req, res) => {
 
   const unitPrice = sellPrice(product);
   const unitCost = product.cost == null || product.cost === "" ? null : Number(product.cost);
+  const cityNames = shippingCities(db.settings);
+  const cities = inferProductCities(product, cityNames);
   const entry = {
     id: uid("l"),
     type,
     productId: product.id,
     productName: product.name,
     category: product.category || "",
+    city: cities[0] || "",
+    cities,
     qty,
     price: type === "sale" ? unitPrice : 0,
     cost: type === "sale" ? unitCost : null,
@@ -2546,7 +2746,7 @@ app.put("/api/settings", requireAdmin, (req, res) => {
       if (price === INVALID) return res.status(400).json({ error: `Frete inválido em "${name}".` });
       shipping.push({ name, price: price == null ? 0 : price, description: str(x && x.description, 160) });
     }
-    s.shipping = shipping;
+    s.shipping = normalizeShippingCashboxes(shipping);
   }
   if (Array.isArray(b.categories)) {
     const seen = new Set();

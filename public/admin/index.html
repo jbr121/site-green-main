@@ -10,7 +10,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Unbounded:wght@700;900&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/css/base.css?v=13" />
-  <link rel="stylesheet" href="/admin/admin.css?v=13" />
+  <link rel="stylesheet" href="/admin/admin.css?v=15" />
 </head>
 <body class="admin-body">
 
@@ -129,23 +129,36 @@
 
     <!-- PRODUCTS TAB -->
     <section id="tab-products" class="tab-panel">
-      <p class="hint">Dica: use nomes curtos no card (ex.: "POD THC 7ML COSMO"). Cada marca guarda seus sabores em <b>Sabores</b>, com foto individual.</p>
-      <div class="toolbar">
-        <input type="search" id="admin-search" placeholder="Buscar produto..." />
+      <p class="hint">Organize por caixa e tipo. Caixas: Itajaí e região, Joinville e região, Atacado (Brasil). Tipos: Pods, Refis, Baterias, Gomas.</p>
+      <div id="catalog-stats" class="catalog-stats"></div>
+      <div class="toolbar toolbar-catalog">
+        <input type="search" id="admin-search" placeholder="Buscar produto, cidade ou categoria..." />
+        <select id="admin-city-filter" class="toolbar-select">
+          <option value="">Todas as cidades</option>
+        </select>
         <select id="admin-cat-filter" class="toolbar-select">
           <option value="">Todas categorias</option>
         </select>
+        <select id="admin-status-filter" class="toolbar-select">
+          <option value="">Todos os status</option>
+          <option value="visible">Visíveis</option>
+          <option value="hidden">Ocultos</option>
+          <option value="pin">Destaque</option>
+          <option value="promo">Promoção</option>
+          <option value="low">Estoque baixo</option>
+          <option value="out">Esgotados</option>
+        </select>
+        <select id="admin-sort" class="toolbar-select">
+          <option value="name">A–Z</option>
+          <option value="price-asc">Menor preço</option>
+          <option value="price-desc">Maior preço</option>
+          <option value="stock">Mais estoque</option>
+          <option value="status">Visíveis primeiro</option>
+        </select>
         <button class="btn btn-gold" id="add-product-btn">+ Anunciar produto</button>
       </div>
-      <div class="table-wrap desktop-only">
-        <table class="table" id="products-table">
-          <thead>
-            <tr><th></th><th>Produto</th><th>Categoria</th><th>Preço</th><th>Status</th><th></th></tr>
-          </thead>
-          <tbody id="products-tbody"></tbody>
-        </table>
-      </div>
-      <div id="product-cards" class="product-cards mobile-only"></div>
+      <p class="catalog-count" id="catalog-count"></p>
+      <div id="catalog-board"></div>
       <button type="button" class="fab-add mobile-only" id="fab-add">+ Anunciar</button>
     </section>
 
@@ -155,6 +168,9 @@
       <div id="stock-alert" class="stock-alert hidden"></div>
       <div class="toolbar">
         <input type="search" id="stock-search" placeholder="Buscar no estoque..." />
+        <select id="stock-city-filter" class="toolbar-select">
+          <option value="">Todas as cidades</option>
+        </select>
         <select id="stock-cat-filter" class="toolbar-select">
           <option value="">Todas categorias</option>
         </select>
@@ -164,13 +180,26 @@
 
     <!-- PROFIT TAB -->
     <section id="tab-profit" class="tab-panel hidden">
-      <div class="period-tabs" id="profit-period">
-        <button type="button" class="period-btn active" data-period="today">Hoje</button>
-        <button type="button" class="period-btn" data-period="week">7 dias</button>
-        <button type="button" class="period-btn" data-period="month">Mês</button>
-        <button type="button" class="period-btn" data-period="all">Tudo</button>
+      <div class="profit-toolbar">
+        <div class="period-tabs" id="profit-period">
+          <button type="button" class="period-btn active" data-period="today">Hoje</button>
+          <button type="button" class="period-btn" data-period="week">7 dias</button>
+          <button type="button" class="period-btn" data-period="month">Mês</button>
+          <button type="button" class="period-btn" data-period="all">Tudo</button>
+        </div>
+        <select id="profit-city-filter" class="toolbar-select" aria-label="Filtrar por caixa">
+          <option value="">Todas as caixas</option>
+        </select>
+        <select id="profit-cat-filter" class="toolbar-select" aria-label="Filtrar por tipo">
+          <option value="">Todos os tipos</option>
+        </select>
       </div>
+      <p class="hint">Caixa = cidade (Itajaí, Joinville, Atacado). Tipo = produto (Pods, Refis, Baterias, Gomas). Os dois filtros combinam.</p>
       <div class="profit-cards" id="profit-cards"></div>
+      <h3 class="section-label">Lucro por caixa</h3>
+      <div id="profit-city-cards" class="profit-city-cards"></div>
+      <h3 class="section-label">Lucro por tipo</h3>
+      <div id="profit-cat-cards" class="profit-city-cards"></div>
       <h3 class="section-label">Movimentações</h3>
       <div id="profit-list" class="profit-list"></div>
     </section>
@@ -238,7 +267,7 @@
         <input type="text" id="new-category" placeholder="Nome da nova categoria" />
         <button class="btn btn-gold" id="add-category-btn">+ Adicionar</button>
       </div>
-      <p class="hint">As categorias aparecem como filtros no topo da loja. Ao anunciar um produto você também pode criar uma categoria nova.</p>
+      <p class="hint">Categoria é o tipo do produto (Pods, Refis, Baterias, Gomas). A cidade de venda fica marcada em cada item, não aqui.</p>
       <div id="categories-list" class="cat-list"></div>
     </section>
 
@@ -259,6 +288,7 @@
         <textarea id="s-payments" rows="3" placeholder="Pix (solicite a chave no atendimento)&#10;Cartão via link de pagamento"></textarea>
 
         <h3>Formas de entrega</h3>
+        <p class="hint">Três caixas: Itajaí, Joinville e Atacado (Brasil). Na entrada da loja o cliente vê Itajaí e região, Joinville e região e Brasil, sem valores.</p>
         <div id="shipping-list"></div>
         <button type="button" class="btn btn-ghost btn-sm" id="add-shipping-btn">+ Adicionar entrega</button>
 
@@ -372,10 +402,15 @@
           <label>Custo (R$) — o que você pagou<input id="p-cost" type="number" step="0.01" min="0" inputmode="decimal" placeholder="Ex.: 120" /></label>
           <label>Estoque (vazio = sem controle)<input id="p-stock" type="number" min="0" step="1" inputmode="numeric" placeholder="Ex.: 10" /></label>
         </div>
-        <label>Categoria
+        <label>Tipo do produto
           <select id="p-category"></select>
         </label>
-        <label class="hidden" id="p-newcat-wrap">Nome da nova categoria<input id="p-newcat" maxlength="60" placeholder="Ex.: Novidades" /></label>
+        <label class="hidden" id="p-newcat-wrap">Nome do novo tipo<input id="p-newcat" maxlength="60" placeholder="Ex.: Pods" /></label>
+        <fieldset class="city-picks">
+          <legend>Cidade onde esse produto aparece *</legend>
+          <div id="p-cities" class="city-check-list"></div>
+          <p class="hint">Marque o caixa onde o produto aparece: Itajaí e região, Joinville e região ou Atacado (Brasil).</p>
+        </fieldset>
         <label>Descrição<textarea id="p-description" rows="7" maxlength="6000" placeholder="Detalhes do produto..."></textarea></label>
 
         <h4 class="modal-section">Sabores desta marca</h4>
@@ -474,6 +509,6 @@
     </form>
   </div>
 
-  <script src="/admin/admin.js?v=15"></script>
+  <script src="/admin/admin.js?v=20"></script>
 </body>
 </html>

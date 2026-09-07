@@ -17,9 +17,16 @@
     flavorProductId: null,
     search: '',
     catFilter: '',
+    cityFilter: '',
+    statusFilter: '',
+    sort: 'name',
     stockSearch: '',
     stockCat: '',
+    stockCity: '',
     profitPeriod: 'today',
+    profitCity: '',
+    profitCat: '',
+    cities: [],
     logs: [],
     logMeta: null,
     logLimit: 100,
@@ -29,6 +36,57 @@
   function sellPrice(p) {
     if (p.promoPrice != null && p.promoPrice < p.price) return Number(p.promoPrice) || 0;
     return Number(p.price) || 0;
+  }
+  function fold(s) {
+    return String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  }
+  const CASHBOXES = [
+    { id: 'Itajaí', title: 'Itajaí e região', check: 'Itajaí e região' },
+    { id: 'Joinville', title: 'Joinville e região', check: 'Joinville e região' },
+    { id: 'Atacado', title: 'Atacado', check: 'Atacado (Brasil)' },
+  ];
+  function cashboxOf(name) {
+    const t = fold(name);
+    if (t.includes('joinville')) return 'Joinville';
+    if (t.includes('itajai')) return 'Itajaí';
+    if (/(brasil|atacado|outras|remoto|transportadora)/.test(t)) return 'Atacado';
+    return CASHBOXES.some((c) => c.id === name) ? name : '';
+  }
+  function cityLabel(name) {
+    const id = cashboxOf(name) || name;
+    const box = CASHBOXES.find((c) => c.id === id);
+    return box ? box.title : name || id;
+  }
+  function cityCheckLabel(name) {
+    const id = cashboxOf(name) || name;
+    const box = CASHBOXES.find((c) => c.id === id);
+    return box ? box.check : name || id;
+  }
+  const PRODUCT_TYPES = ['Pods', 'Refis', 'Baterias', 'Gomas', 'Outros'];
+  function isTypeCategory(name) {
+    const t = String(name || '').trim();
+    if (!t) return false;
+    return !cashboxOf(t);
+  }
+  function inferTypeFromName(name) {
+    const t = fold(name);
+    if (t.includes('goma')) return 'Gomas';
+    if (t.includes('bateria')) return 'Baterias';
+    if (t.includes('refil')) return 'Refis';
+    if (t.includes('pod')) return 'Pods';
+    return '';
+  }
+  function sortTypeNames(list) {
+    return [...list].sort((a, b) => {
+      const ia = PRODUCT_TYPES.indexOf(a);
+      const ib = PRODUCT_TYPES.indexOf(b);
+      if (a === 'Sem categoria') return 1;
+      if (b === 'Sem categoria') return -1;
+      if (ia < 0 && ib < 0) return a.localeCompare(b, 'pt-BR');
+      if (ia < 0) return 1;
+      if (ib < 0) return -1;
+      return ia - ib;
+    });
   }
   function unitProfit(p) {
     if (p.cost == null || p.cost === '') return null;
@@ -453,13 +511,16 @@
 
   /* ---------- data ---------- */
   async function loadAll() {
-    const [{ products, categories }, ledgerRes] = await Promise.all([
+    const [{ products, categories, cities }, ledgerRes] = await Promise.all([
       api('/api/products'),
       api('/api/ledger').catch(() => ({ ledger: [] })),
     ]);
     state.products = products;
     state.categories = categories;
+    state.cities = cities || [];
     state.ledger = ledgerRes.ledger || [];
+    fillCitySelects();
+    fillTypeSelects();
     const catOpts =
       '<option value="">Todas categorias</option>' +
       categories.map((c) => `<option value="${esc(c)}">${esc(c)}</option>`).join('');
@@ -485,6 +546,9 @@
       state.settings = settingsRes.settings || {};
       state.users = users.users || [];
       state.customers = customersRes.customers || [];
+      fillCitySelects();
+      fillTypeSelects();
+      renderProfit();
       renderCategories();
       renderSettings();
       renderPromoAdmin();
@@ -505,41 +569,128 @@
     return parts.join(' · ');
   }
 
-  function renderProducts() {
+  function cityNames() {
+    const fromSettings = (state.settings.shipping || []).map((s) => cashboxOf(s.name)).filter(Boolean);
+    const fromApi = (state.cities || []).map(cashboxOf).filter(Boolean);
+    const fromProducts = state.products.flatMap((p) => (p.cities || []).map(cashboxOf)).filter(Boolean);
+    const seen = new Set();
+    const out = [];
+    for (const id of ['Itajaí', 'Joinville', 'Atacado', ...fromSettings, ...fromApi, ...fromProducts]) {
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      out.push(id);
+    }
+    return out.length ? out : ['Itajaí', 'Joinville', 'Atacado'];
+  }
+
+  function productCities(p) {
+    const names = cityNames();
+    if (Array.isArray(p.cities) && p.cities.length) {
+      const mapped = [...new Set(p.cities.map(cashboxOf).filter(Boolean))];
+      if (mapped.length) return mapped;
+    }
+    const match = names.find((n) => cashboxOf(p.category) === n);
+    if (match) return [match];
+    const other = names.find((n) => n === 'Atacado') || names[names.length - 1];
+    return other ? [other] : [];
+  }
+
+  function productInCity(p, city) {
+    if (!city) return true;
+    return productCities(p).includes(cashboxOf(city) || city);
+  }
+
+  function productFlags(p) {
+    const tracking = p.stockActive && p.stock != null;
+    return {
+      tracking,
+      out: tracking && p.stock <= 0,
+      low: tracking && p.stock > 0 && p.stock <= 3,
+      promo: p.promoPrice != null && p.promoPrice < p.price,
+      visible: p.active !== false,
+      pin: !!p.pin,
+    };
+  }
+
+  function fillCitySelects() {
+    const names = cityNames();
+    [
+      ['#admin-city-filter', state.cityFilter, 'Todas as cidades'],
+      ['#stock-city-filter', state.stockCity, 'Todas as cidades'],
+      ['#profit-city-filter', state.profitCity, 'Todas as caixas'],
+    ].forEach(([sel, value, allLabel]) => {
+      const el = $(sel);
+      if (!el) return;
+      el.innerHTML = `<option value="">${allLabel}</option>` + names.map((c) => `<option value="${esc(c)}">${esc(cityLabel(c))}</option>`).join('');
+      el.value = value || '';
+    });
+  }
+
+  function typeNames() {
+    const fromState = (state.categories || []).filter(isTypeCategory);
+    const fromProducts = state.products.map((p) => p.category).filter(isTypeCategory);
+    const fromLedger = (state.ledger || []).map(ledgerCategory).filter((c) => c && c !== 'Sem categoria' && isTypeCategory(c));
+    const seen = new Set();
+    const out = [];
+    for (const id of ['Pods', 'Refis', 'Baterias', 'Gomas', ...fromState, ...fromProducts, ...fromLedger]) {
+      if (!id || seen.has(id) || id === 'Sem categoria' || !isTypeCategory(id)) continue;
+      seen.add(id);
+      out.push(id);
+    }
+    if ((state.ledger || []).some((e) => ledgerCategory(e) === 'Sem categoria')) out.push('Sem categoria');
+    return sortTypeNames(out);
+  }
+
+  function fillTypeSelects() {
+    const el = $('#profit-cat-filter');
+    if (!el) return;
+    const names = typeNames();
+    el.innerHTML =
+      '<option value="">Todos os tipos</option>' + names.map((c) => `<option value="${esc(c)}">${esc(c)}</option>`).join('');
+    el.value = names.includes(state.profitCat) || !state.profitCat ? state.profitCat : '';
+    if (el.value !== state.profitCat) state.profitCat = el.value;
+  }
+
+  function sortCatalog(list) {
+    const mode = state.sort || 'name';
+    return [...list].sort((a, b) => {
+      if (mode === 'price-asc') return sellPrice(a) - sellPrice(b);
+      if (mode === 'price-desc') return sellPrice(b) - sellPrice(a);
+      if (mode === 'stock') return (Number(b.stock) || 0) - (Number(a.stock) || 0);
+      if (mode === 'status') {
+        if ((a.active !== false) !== (b.active !== false)) return a.active !== false ? -1 : 1;
+        return a.name.localeCompare(b.name, 'pt-BR');
+      }
+      return a.name.localeCompare(b.name, 'pt-BR');
+    });
+  }
+
+  function filteredProducts() {
     const q = state.search.trim().toLowerCase();
     const cat = state.catFilter;
-    const list = state.products.filter((p) => {
-      if (cat && p.category !== cat) return false;
-      return !q || [p.name, p.category].join(' ').toLowerCase().includes(q);
-    });
-    $('#products-tbody').innerHTML = list
-      .map((p) => {
-        const promo = p.promoPrice != null && p.promoPrice < p.price;
-        const tracking = p.stockActive && p.stock != null;
-        const outOfStock = tracking && p.stock <= 0;
-        const flavors = (p.options || []).length;
-        return `
-        <tr>
-          <td><img class="t-thumb img-hide-on-error" src="${esc(p.image)}" alt="" loading="lazy" /></td>
-          <td class="t-name">${esc(p.name)}${flavors ? `<small class="t-flavors">${esc(flavorSummary(p))}</small>` : ''}</td>
-          <td class="t-cat t-cat-col">${esc(p.category || '—')}</td>
-          <td class="t-price">${money(promo ? p.promoPrice : p.price)}${promo ? `<small>${money(p.price)}</small>` : ''}</td>
-          <td><div class="status">
-            <button type="button" class="status-toggle ${p.active ? 'on' : 'off'}" data-act="toggle-active" data-id="${esc(p.id)}" title="Visível na loja">${p.active ? 'Visível' : 'Oculto'}</button>
-            <button type="button" class="status-toggle ${p.pin ? 'promo' : ''}" data-act="toggle-pin" data-id="${esc(p.id)}" title="Destaque">${p.pin ? '★ Destaque' : '☆ Normal'}</button>
-            ${outOfStock ? '<span class="out">Esgotado</span>' : tracking ? `<span class="${p.stock <= 3 ? 'out' : 'on'}">${p.stock} un.</span>` : ''}
-          </div></td>
-          <td><div class="t-actions">
-            <button class="icon-btn" data-act="flavors" data-id="${esc(p.id)}" title="Sabores e fotos">🎨</button>
-            <button class="icon-btn" data-act="edit" data-id="${esc(p.id)}" title="Editar">✏️</button>
-            <button class="icon-btn" data-act="dup" data-id="${esc(p.id)}" title="Duplicar">📋</button>
-            <button class="icon-btn danger" data-act="del" data-id="${esc(p.id)}" title="Tirar">🗑</button>
-          </div></td>
-        </tr>`;
+    const city = state.cityFilter;
+    const status = state.statusFilter;
+    return sortCatalog(
+      state.products.filter((p) => {
+        if (!productInCity(p, city)) return false;
+        if (cat && p.category !== cat) return false;
+        if (q && ![p.name, p.category, ...productCities(p)].join(' ').toLowerCase().includes(q)) return false;
+        const st = productFlags(p);
+        if (status === 'visible' && !st.visible) return false;
+        if (status === 'hidden' && st.visible) return false;
+        if (status === 'pin' && !st.pin) return false;
+        if (status === 'promo' && !st.promo) return false;
+        if (status === 'low' && !st.low) return false;
+        if (status === 'out' && !st.out) return false;
+        return true;
       })
-      .join('');
-    $('#products-tbody').querySelectorAll('button').forEach((b) =>
-      b.addEventListener('click', () => {
+    );
+  }
+
+  function bindProductActs(root) {
+    root.querySelectorAll('button[data-act]').forEach((b) =>
+      b.addEventListener('click', (ev) => {
+        ev.stopPropagation();
         const { act, id } = b.dataset;
         if (act === 'edit') openProductModal(id);
         else if (act === 'dup') duplicateProduct(id);
@@ -549,38 +700,128 @@
         else if (act === 'toggle-pin') quickToggle(id, 'pin');
       })
     );
+  }
 
-    const cards = $('#product-cards');
-    if (cards) {
-      cards.innerHTML =
-        list
-          .map((p) => {
-            const promo = p.promoPrice != null && p.promoPrice < p.price;
-            const tracking = p.stockActive && p.stock != null;
-            const outOfStock = tracking && p.stock <= 0;
-            const flavors = flavorSummary(p);
-            return `
+  function productRowHtml(p) {
+    const st = productFlags(p);
+    const flavors = (p.options || []).length;
+    const chips = productCities(p).map((c) => `<span class="city-chip">${esc(cityLabel(c))}</span>`).join('');
+    return `
+        <tr>
+          <td><img class="t-thumb img-hide-on-error" src="${esc(p.image)}" alt="" loading="lazy" /></td>
+          <td class="t-name">${esc(p.name)}${flavors ? `<small class="t-flavors">${esc(flavorSummary(p))}</small>` : ''}<div class="city-chips">${chips}</div></td>
+          <td class="t-cat t-cat-col">${esc(p.category || '—')}</td>
+          <td class="t-price">${money(st.promo ? p.promoPrice : p.price)}${st.promo ? `<small>${money(p.price)}</small>` : ''}</td>
+          <td><div class="status">
+            <button type="button" class="status-toggle ${st.visible ? 'on' : 'off'}" data-act="toggle-active" data-id="${esc(p.id)}" title="Visível na loja">${st.visible ? 'Visível' : 'Oculto'}</button>
+            <button type="button" class="status-toggle ${st.pin ? 'promo' : ''}" data-act="toggle-pin" data-id="${esc(p.id)}" title="Destaque">${st.pin ? '★ Destaque' : '☆ Normal'}</button>
+            ${st.out ? '<span class="out">Esgotado</span>' : st.tracking ? `<span class="${p.stock <= 3 ? 'out' : 'on'}">${p.stock} un.</span>` : ''}
+          </div></td>
+          <td><div class="t-actions">
+            <button class="icon-btn" data-act="flavors" data-id="${esc(p.id)}" title="Sabores e fotos">🎨</button>
+            <button class="icon-btn" data-act="edit" data-id="${esc(p.id)}" title="Editar">✏️</button>
+            <button class="icon-btn" data-act="dup" data-id="${esc(p.id)}" title="Duplicar">📋</button>
+            <button class="icon-btn danger" data-act="del" data-id="${esc(p.id)}" title="Tirar">🗑</button>
+          </div></td>
+        </tr>`;
+  }
+
+  function productCardHtml(p) {
+    const st = productFlags(p);
+    const flavors = flavorSummary(p);
+    const chips = productCities(p).map((c) => `<span class="city-chip">${esc(cityLabel(c))}</span>`).join('');
+    return `
           <div class="product-card">
             <img class="img-hide-on-error" src="${esc(p.image || '')}" alt="" loading="lazy" />
             <button type="button" class="product-card-main" data-act="edit" data-id="${esc(p.id)}">
               <span class="product-card-name">${esc(p.name)}</span>
-              <span class="product-card-meta">${esc(p.category || '—')}${outOfStock ? ' · esgotado' : tracking ? ` · ${p.stock} un.` : ''} · ${p.active ? 'visível' : 'oculto'}</span>
+              <span class="product-card-meta">${esc(p.category || '—')}${st.out ? ' · esgotado' : st.tracking ? ` · ${p.stock} un.` : ''} · ${st.visible ? 'visível' : 'oculto'}</span>
+              <span class="city-chips">${chips}</span>
               ${flavors ? `<span class="product-card-flavors">${esc(flavors)}</span>` : ''}
             </button>
             <div class="product-card-side">
-              <strong class="product-card-price">${money(promo ? p.promoPrice : p.price)}</strong>
+              <strong class="product-card-price">${money(st.promo ? p.promoPrice : p.price)}</strong>
               <button type="button" class="icon-btn" data-act="flavors" data-id="${esc(p.id)}" title="Sabores">🎨</button>
             </div>
           </div>`;
-          })
-          .join('') || '<p class="profit-empty">Nenhum produto nesta busca.</p>';
-      cards.querySelectorAll('button[data-act]').forEach((b) =>
-        b.addEventListener('click', () => {
-          if (b.dataset.act === 'flavors') openFlavors(b.dataset.id);
-          else openProductModal(b.dataset.id);
-        })
-      );
+  }
+
+  function renderCatalogStats() {
+    const wrap = $('#catalog-stats');
+    if (!wrap) return;
+    wrap.innerHTML = cityNames()
+      .map((city) => {
+        const list = state.products.filter((p) => productInCity(p, city));
+        const hidden = list.filter((p) => p.active === false).length;
+        const low = list.filter((p) => productFlags(p).low || productFlags(p).out).length;
+        return `<button type="button" class="catalog-stat ${state.cityFilter === city ? 'active' : ''}" data-city="${esc(city)}">
+          <strong>${list.length}</strong>
+          <span>${esc(cityLabel(city))}</span>
+          <small>${hidden ? `${hidden} oculto${hidden === 1 ? '' : 's'}` : 'todos visíveis'}${low ? ` · ${low} estoque baixo` : ''}</small>
+        </button>`;
+      })
+      .join('');
+    wrap.querySelectorAll('[data-city]').forEach((b) =>
+      b.addEventListener('click', () => {
+        state.cityFilter = state.cityFilter === b.dataset.city ? '' : b.dataset.city;
+        const sel = $('#admin-city-filter');
+        if (sel) sel.value = state.cityFilter;
+        renderProducts();
+      })
+    );
+  }
+
+  function renderProducts() {
+    renderCatalogStats();
+    const list = filteredProducts();
+    const count = $('#catalog-count');
+    if (count) {
+      count.textContent = `${list.length} ${list.length === 1 ? 'produto' : 'produtos'}` +
+        (state.cityFilter ? ` em ${cityLabel(state.cityFilter)}` : '') +
+        (state.catFilter ? ` · ${state.catFilter}` : '');
     }
+    const cities = cityNames().filter((c) => !state.cityFilter || c === state.cityFilter);
+    const board = $('#catalog-board');
+    if (!list.length) {
+      board.innerHTML = '<p class="profit-empty">Nenhum produto nesta busca.</p>';
+      return;
+    }
+    board.innerHTML = cities
+      .map((city) => {
+        const items = list.filter((p) => productInCity(p, city));
+        if (!items.length) return '';
+        const cats = [...new Set(items.map((p) => p.category || 'Sem categoria'))].sort((a, b) => {
+          const order = ['Pods', 'Refis', 'Baterias', 'Gomas', 'Outros'];
+          const ia = order.indexOf(a);
+          const ib = order.indexOf(b);
+          if (ia < 0 && ib < 0) return a.localeCompare(b, 'pt-BR');
+          if (ia < 0) return 1;
+          if (ib < 0) return -1;
+          return ia - ib;
+        });
+        const hidden = items.filter((p) => p.active === false).length;
+        const catBlocks = cats
+          .map((cat) => {
+            const rows = items.filter((p) => (p.category || 'Sem categoria') === cat);
+            return `<details class="catalog-cat" open>
+              <summary>${esc(cat)} <em>${rows.length}</em></summary>
+              <div class="table-wrap desktop-only">
+                <table class="table">
+                  <thead><tr><th></th><th>Produto</th><th>Categoria</th><th>Preço</th><th>Status</th><th></th></tr></thead>
+                  <tbody>${rows.map(productRowHtml).join('')}</tbody>
+                </table>
+              </div>
+              <div class="product-cards mobile-only">${rows.map(productCardHtml).join('')}</div>
+            </details>`;
+          })
+          .join('');
+        return `<details class="catalog-city" open>
+          <summary>${esc(cityLabel(city))} <em>${items.length} produto${items.length === 1 ? '' : 's'}${hidden ? ` · ${hidden} oculto${hidden === 1 ? '' : 's'}` : ''}</em></summary>
+          <div class="catalog-city-body">${catBlocks}</div>
+        </details>`;
+      })
+      .join('') || '<p class="profit-empty">Nenhum produto nesta busca.</p>';
+    bindProductActs(board);
   }
 
   async function quickToggle(id, field) {
@@ -613,6 +854,18 @@
     state.catFilter = e.target.value;
     renderProducts();
   });
+  $('#admin-city-filter').addEventListener('change', (e) => {
+    state.cityFilter = e.target.value;
+    renderProducts();
+  });
+  $('#admin-status-filter').addEventListener('change', (e) => {
+    state.statusFilter = e.target.value;
+    renderProducts();
+  });
+  $('#admin-sort').addEventListener('change', (e) => {
+    state.sort = e.target.value;
+    renderProducts();
+  });
   $('#add-product-btn').addEventListener('click', () => openProductModal(null));
   $('#fab-add').addEventListener('click', () => openProductModal(null));
   $('#stock-search').addEventListener('input', (e) => {
@@ -623,10 +876,22 @@
     state.stockCat = e.target.value;
     renderStock();
   });
+  $('#stock-city-filter').addEventListener('change', (e) => {
+    state.stockCity = e.target.value;
+    renderStock();
+  });
   $('#profit-period').addEventListener('click', (e) => {
     const btn = e.target.closest('[data-period]');
     if (!btn) return;
     state.profitPeriod = btn.dataset.period;
+    renderProfit();
+  });
+  $('#profit-city-filter').addEventListener('change', (e) => {
+    state.profitCity = e.target.value;
+    renderProfit();
+  });
+  $('#profit-cat-filter').addEventListener('change', (e) => {
+    state.profitCat = e.target.value;
     renderProfit();
   });
 
@@ -634,9 +899,11 @@
   function stockList() {
     const q = state.stockSearch.trim().toLowerCase();
     const cat = state.stockCat;
+    const city = state.stockCity;
     return state.products.filter((p) => {
+      if (city && !productInCity(p, city)) return false;
       if (cat && p.category !== cat) return false;
-      return !q || [p.name, p.category].join(' ').toLowerCase().includes(q);
+      return !q || [p.name, p.category, ...productCities(p)].join(' ').toLowerCase().includes(q);
     });
   }
 
@@ -663,7 +930,7 @@
           <img class="img-hide-on-error" src="${esc(p.image || '')}" alt="" loading="lazy" />
           <div>
             <div class="stock-card-name">${esc(p.name)}</div>
-            <div class="stock-card-meta">${esc(p.category || '—')} · <strong>${money(price)}</strong></div>
+            <div class="stock-card-meta">${esc(p.category || '—')} · ${productCities(p).map((c) => esc(cityLabel(c))).join(' · ')} · <strong>${money(price)}</strong></div>
             <div class="${profit == null ? 'unit-profit missing' : 'unit-profit'}">${
               profit == null ? 'Informe o custo para ver o lucro' : `Lucro ${money(profit)} / un.`
             }</div>
@@ -742,27 +1009,107 @@
     return d;
   }
 
+  function ledgerCities(e) {
+    const raw = Array.isArray(e.cities) && e.cities.length ? e.cities : e.city ? [e.city] : null;
+    if (raw) {
+      const mapped = [...new Set(raw.map(cashboxOf).filter(Boolean))];
+      if (mapped.length) return mapped;
+    }
+    const p = state.products.find((x) => x.id === e.productId);
+    return p ? productCities(p) : [cashboxOf(e.category)].filter(Boolean);
+  }
+
+  function ledgerPrimaryCity(e) {
+    return cashboxOf(ledgerCities(e)[0]) || ledgerCities(e)[0] || 'Sem cidade';
+  }
+
+  function ledgerCategory(e) {
+    const fromEntry = String(e.category || '').trim();
+    if (fromEntry && isTypeCategory(fromEntry)) return fromEntry;
+    const p = state.products.find((x) => x.id === e.productId);
+    const fromProduct = String((p && p.category) || '').trim();
+    if (fromProduct && isTypeCategory(fromProduct)) return fromProduct;
+    return inferTypeFromName((p && p.name) || e.productName) || 'Sem categoria';
+  }
+
+  function ledgerInCity(e, city) {
+    if (!city) return true;
+    const want = cashboxOf(city) || city;
+    return ledgerCities(e).includes(want);
+  }
+
+  function ledgerInType(e, cat) {
+    if (!cat) return true;
+    return ledgerCategory(e) === cat;
+  }
+
+  function saleTotals(sales) {
+    const revenue = sales.reduce((s, e) => s + (Number(e.price) || 0) * (e.qty || 0), 0);
+    const known = sales.filter((e) => e.cost != null && e.cost !== '');
+    const costSum = known.reduce((s, e) => s + (Number(e.cost) || 0) * (e.qty || 0), 0);
+    const profit = known.reduce((s, e) => s + ((Number(e.price) || 0) - (Number(e.cost) || 0)) * (e.qty || 0), 0);
+    const qty = sales.reduce((s, e) => s + (e.qty || 0), 0);
+    return { revenue, costSum, profit, qty, missing: sales.length - known.length, known: known.length };
+  }
+
   function renderProfit() {
     document.querySelectorAll('#profit-period .period-btn').forEach((b) =>
       b.classList.toggle('active', b.dataset.period === state.profitPeriod)
     );
     const start = periodStart(state.profitPeriod);
-    const rows = (state.ledger || []).filter((e) => !start || new Date(e.createdAt) >= start);
+    const periodRows = (state.ledger || []).filter((e) => !start || new Date(e.createdAt) >= start);
+    const rows = periodRows.filter((e) => ledgerInCity(e, state.profitCity) && ledgerInType(e, state.profitCat));
     const sales = rows.filter((e) => e.type === 'sale');
-    const revenue = sales.reduce((s, e) => s + (Number(e.price) || 0) * (e.qty || 0), 0);
-    const known = sales.filter((e) => e.cost != null && e.cost !== '');
-    const costSum = known.reduce((s, e) => s + (Number(e.cost) || 0) * (e.qty || 0), 0);
-    const profit = known.reduce((s, e) => s + ((Number(e.price) || 0) - (Number(e.cost) || 0)) * (e.qty || 0), 0);
-    const missing = sales.length - known.length;
+    const totals = saleTotals(sales);
+    const filterHint = [state.profitCity ? cityLabel(state.profitCity) : '', state.profitCat]
+      .filter(Boolean)
+      .join(' · ');
     $('#profit-cards').innerHTML = `
-      <div class="profit-card"><span>Faturamento</span><strong>${money(revenue)}</strong></div>
-      <div class="profit-card ok"><span>Lucro</span><strong>${money(profit)}</strong></div>
-      <div class="profit-card"><span>Vendas</span><strong>${sales.reduce((s, e) => s + (e.qty || 0), 0)}</strong></div>
+      <div class="profit-card"><span>Faturamento${filterHint ? ` · ${esc(filterHint)}` : ''}</span><strong>${money(totals.revenue)}</strong></div>
+      <div class="profit-card ok"><span>Lucro</span><strong>${money(totals.profit)}</strong></div>
+      <div class="profit-card"><span>Vendas</span><strong>${totals.qty}</strong></div>
     `;
-    const warn = missing
-      ? `<p class="hint">${missing} venda${missing === 1 ? '' : 's'} sem custo — o lucro dessas ficou de fora. Preencha o custo no Estoque.</p>`
-      : known.length
-        ? `<p class="hint">Custo das vendas: ${money(costSum)}</p>`
+    const cityWrap = $('#profit-city-cards');
+    if (cityWrap) {
+      const cityRows = periodRows.filter((e) => ledgerInType(e, state.profitCat));
+      cityWrap.innerHTML = cityNames()
+        .map((city) => {
+          const citySales = cityRows.filter((e) => e.type === 'sale' && ledgerPrimaryCity(e) === city);
+          const t = saleTotals(citySales);
+          const active = state.profitCity && (cashboxOf(state.profitCity) || state.profitCity) === city;
+          return `<article class="profit-city-card${active ? ' is-filtered' : ''}">
+            <span class="profit-card-kicker">Caixa</span>
+            <h4>${esc(cityLabel(city))}</h4>
+            <p>Faturamento <strong>${money(t.revenue)}</strong></p>
+            <p>Lucro <strong>${money(t.profit)}</strong></p>
+            <p>${t.qty} venda${t.qty === 1 ? '' : 's'}</p>
+          </article>`;
+        })
+        .join('');
+    }
+    const catWrap = $('#profit-cat-cards');
+    if (catWrap) {
+      const catRows = periodRows.filter((e) => ledgerInCity(e, state.profitCity));
+      const cats = typeNames();
+      catWrap.innerHTML = cats
+        .map((cat) => {
+          const catSales = catRows.filter((e) => e.type === 'sale' && ledgerCategory(e) === cat);
+          const t = saleTotals(catSales);
+          const active = state.profitCat === cat;
+          return `<article class="profit-city-card is-type${active ? ' is-filtered' : ''}">
+            <span class="profit-card-kicker">Tipo</span>
+            <h4>${esc(cat)}</h4>
+            <p>Faturamento <strong>${money(t.revenue)}</strong></p>
+            <p>Lucro <strong>${money(t.profit)}</strong></p>
+            <p>${t.qty} venda${t.qty === 1 ? '' : 's'}</p>
+          </article>`;
+        })
+        .join('');
+    }
+    const warn = totals.missing
+      ? `<p class="hint">${totals.missing} venda${totals.missing === 1 ? '' : 's'} sem custo — o lucro dessas ficou de fora. Preencha o custo no Estoque.</p>`
+      : totals.known
+        ? `<p class="hint">Custo das vendas: ${money(totals.costSum)}</p>`
         : '';
     const list = rows.length
       ? rows
@@ -777,11 +1124,13 @@
                   ? ` · lucro ${money(((Number(e.price) || 0) - (Number(e.cost) || 0)) * (e.qty || 0))}`
                   : ' · sem custo'
                 : '';
+            const city = ledgerPrimaryCity(e);
+            const cat = ledgerCategory(e);
             return `
             <div class="profit-row">
               <div class="profit-row-name">${esc(e.productName)}</div>
               <div class="profit-row-value ${esc(e.type)}">${val}</div>
-              <div class="profit-row-meta">${kind} · ${e.qty} un. · ${when}${extra}${e.userName ? ` · ${esc(e.userName)}` : ''}
+              <div class="profit-row-meta">${kind} · ${esc(cityLabel(city))} · <span class="type-chip">${esc(cat)}</span> · ${e.qty} un. · ${when}${extra}${e.userName ? ` · ${esc(e.userName)}` : ''}
                 <button type="button" class="icon-btn danger undo-btn" data-undo="${esc(e.id)}" title="Desfazer">↩</button>
               </div>
             </div>`;
@@ -811,12 +1160,21 @@
   }
 
   /* ---------- product modal ---------- */
+  function fillCityChecks(selected) {
+    const chosen = new Set((selected || []).map(cashboxOf).filter(Boolean));
+    $('#p-cities').innerHTML = cityNames()
+      .map(
+        (c) => `<label class="city-check"><input type="checkbox" value="${esc(c)}" ${chosen.has(c) || chosen.has(cityLabel(c)) ? 'checked' : ''} /> ${esc(cityCheckLabel(c))}</label>`
+      )
+      .join('');
+  }
+
   function fillCategorySelect(selected) {
     const sel = $('#p-category');
     sel.innerHTML =
-      '<option value="">Sem categoria</option>' +
+      '<option value="">Sem tipo</option>' +
       state.categories.map((c) => `<option value="${esc(c)}" ${selected === c ? 'selected' : ''}>${esc(c)}</option>`).join('') +
-      '<option value="__new">➕ Criar nova categoria...</option>';
+      '<option value="__new">➕ Criar novo tipo...</option>';
     $('#p-newcat-wrap').classList.add('hidden');
     $('#p-newcat').value = '';
   }
@@ -858,6 +1216,7 @@
       prev.style.visibility = 'hidden';
     }
     fillCategorySelect(p ? p.category : '');
+    fillCityChecks(p ? productCities(p) : []);
     $('#product-modal').classList.remove('hidden');
   }
   function closeProductModal() {
@@ -884,6 +1243,11 @@
     e.preventDefault();
     let category = $('#p-category').value;
     if (category === '__new') category = $('#p-newcat').value.trim();
+    const cities = [...document.querySelectorAll('#p-cities input:checked')].map((i) => i.value);
+    if (!cities.length) {
+      toast('Escolha ao menos uma cidade.');
+      return;
+    }
     const editing = !!state.editingId;
     const fd = new FormData();
     fd.append('name', $('#p-name').value);
@@ -891,6 +1255,7 @@
     fd.append('promoPrice', $('#p-promoPrice').value);
     fd.append('cost', $('#p-cost').value);
     fd.append('category', category);
+    fd.append('cities', JSON.stringify(cities));
     fd.append('description', $('#p-description').value);
     fd.append('optionGroup', $('#p-optionGroup').value);
     // Ao editar, os sabores são gerenciados na tela própria (não sobrescreve fotos)
@@ -1241,7 +1606,7 @@
 
   function shippingRowHtml(sh) {
     return `
-        <input class="ship-name" value="${esc(sh.name || '')}" maxlength="60" placeholder="Região (ex.: Joinville)" />
+        <input class="ship-name" value="${esc(sh.name || '')}" maxlength="60" placeholder="Caixa: Itajaí, Joinville ou Atacado" />
         <input class="ship-price" type="number" step="0.01" min="0" inputmode="decimal" value="${sh.price ?? ''}" placeholder="R$" />
         <input class="ship-desc" value="${esc(sh.description || '')}" maxlength="160" placeholder="Detalhe (ex.: Motoboy — entrega rápida)" />
       <button type="button" class="icon-btn danger" title="Remover">🗑</button>`;

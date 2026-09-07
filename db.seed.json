@@ -15,17 +15,17 @@
       {
         "name": "Itajaí",
         "price": 15,
-        "description": "Motoboy — entrega rápida na cidade"
+        "description": "Motoboy — entrega rápida na região"
       },
       {
         "name": "Joinville",
         "price": 15,
-        "description": "Motoboy — entrega rápida na cidade"
+        "description": "Motoboy — entrega rápida na região"
       },
       {
-        "name": "Outras cidades",
-        "price": 50,
-        "description": "Transportadora — envio para todo o Brasil"
+        "name": "Atacado",
+        "price": 0,
+        "description": "Brasil"
       }
     ],
     "checkoutMessage": "Sem cadastro. O pedido abre no WhatsApp da loja para confirmar pagamento e entrega.",
@@ -46,9 +46,10 @@
     }
   },
   "categories": [
-    "Itajaí",
-    "Joinville",
-    "Atacado"
+    "Pods",
+    "Refis",
+    "Baterias",
+    "Gomas"
   ],
   "products": [],
   "users": [],
