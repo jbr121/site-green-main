@@ -49,19 +49,6 @@ fs.mkdirSync(BACKUPS, { recursive: true });
 function resolveSessionSecret() {
   const secret = process.env.SESSION_SECRET;
   if (secret && secret.length >= 32) return secret;
-  const hosted =
-    process.env.RAILWAY_ENVIRONMENT ||
-    process.env.RAILWAY_PROJECT_ID ||
-    process.env.RAILWAY_SERVICE_ID ||
-    process.env.RENDER ||
-    process.env.FLY_APP_NAME;
-  if (PROD && !hosted) {
-    console.error(
-      "[FATAL] Defina SESSION_SECRET com pelo menos 32 caracteres aleatórios antes de subir em produção.\n" +
-        '        Gere uma: node -e "console.log(require(\'crypto\').randomBytes(48).toString(\'hex\'))"'
-    );
-    process.exit(1);
-  }
   const secretFile = path.join(DATA_DIR, ".session-secret");
   try {
     if (fs.existsSync(secretFile)) {
